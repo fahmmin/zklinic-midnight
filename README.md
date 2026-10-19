@@ -5,6 +5,8 @@
 
 **Demo video:** [https://youtu.be/RYE_c_51CQw](https://youtu.be/RYE_c_51CQw)
 
+**Pitch deck:** [zklinic-pptx.pdf (Google Drive)](https://drive.google.com/file/d/1Y8k4u9DnwWxGKQ2y9fn9XEg4be3FCf4J/view?usp=sharing)
+
 > **Heads-up on the hosted backend.** The demo Verification API runs on a free hosting tier (Render) with limited resources. After a period of idle time it goes to sleep, and under load it can be slow or temporarily unavailable — so the backend may not respond on the first requests (give it up to a minute to wake up). The app header shows a live **API status** pill (*online* / *waking up…*) so you can tell. For a fully reliable run, start the API locally (see [Quick start](#quick-start)).
 
 ---
@@ -362,6 +364,7 @@ npm run test:e2e
 | Resource                                 | URL                                                                                                                                  |
 | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
 | Demo video                               | [https://youtu.be/RYE_c_51CQw](https://youtu.be/RYE_c_51CQw)                                                                         |
+| Pitch deck                               | [zklinic-pptx.pdf (Google Drive)](https://drive.google.com/file/d/1Y8k4u9DnwWxGKQ2y9fn9XEg4be3FCf4J/view?usp=sharing) |
 | ZKClinic Verification API (preprod demo) | [https://zklinic-verification-api.onrender.com](https://zklinic-verification-api.onrender.com)                                       |
 | Midnight docs                            | [https://docs.midnight.network](https://docs.midnight.network)                                                                       |
 | Compact language reference               | [https://docs.midnight.network/develop/reference/compact/lang-ref](https://docs.midnight.network/develop/reference/compact/lang-ref) |
