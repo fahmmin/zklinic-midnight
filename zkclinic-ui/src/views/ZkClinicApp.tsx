@@ -6,6 +6,7 @@ import {
   DEMO_OCR_SMC_HINT
 } from "../lib/demoWorkspaceMocks";
 import { Link, NavLink, useNavigate, useParams } from "react-router-dom";
+import { ApiStatusBadge } from "../components/ApiStatusBadge";
 import { OPEN_COMMAND_PALETTE_EVENT } from "../components/CommandPalette";
 import { GuidedFlowBanner } from "../components/GuidedFlowBanner";
 import { ShieldLeafIcon, SparkGridIcon } from "../components/illustrations/ZkClinicSvgs";
@@ -339,6 +340,7 @@ export function ZkClinicApp() {
             <span className="zk-network-badge" data-testid="build-midnight-network" title="VITE_NETWORK_ID for this build">
               Midnight · {BUILD_MIDNIGHT_NETWORK_LABEL}
             </span>
+            <ApiStatusBadge />
             <button
               type="button"
               className="zk-palette-trigger"

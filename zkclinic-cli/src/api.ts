@@ -169,6 +169,28 @@ const isHttpOk = async (url: string, timeoutMs: number): Promise<boolean> => {
   }
 };
 
+type SyncProgressLike = {
+  appliedIndex: bigint;
+  highestRelevantWalletIndex: bigint;
+  highestIndex: bigint;
+  isConnected: boolean;
+};
+
+/** Compact per-wallet sync status, e.g. `shielded 120/5000 (connected)`. Defensive: SDK state shapes vary. */
+const describeSyncProgress = (state: unknown): string => {
+  const parts: string[] = [];
+  for (const key of ["shielded", "unshielded", "dust"] as const) {
+    const progress = (state as Record<string, { progress?: SyncProgressLike } | undefined>)[key]?.progress;
+    if (!progress) continue;
+    parts.push(
+      `${key} ${progress.appliedIndex}/${progress.highestRelevantWalletIndex} (head ${progress.highestIndex}, ${
+        progress.isConnected ? "connected" : "DISCONNECTED"
+      })`
+    );
+  }
+  return parts.join(" | ");
+};
+
 const waitForSync = (wallet: WalletFacade) =>
   withTimeout(
     "Wallet sync",
@@ -176,7 +198,7 @@ const waitForSync = (wallet: WalletFacade) =>
     Rx.firstValueFrom(
       wallet.state().pipe(
         Rx.throttleTime(5_000),
-        Rx.tap((state) => log(`Waiting for wallet sync. Synced: ${state.isSynced}`)),
+        Rx.tap((state) => log(`Waiting for wallet sync. Synced: ${state.isSynced} ${describeSyncProgress(state)}`)),
         Rx.filter((state) => state.isSynced)
       )
     )

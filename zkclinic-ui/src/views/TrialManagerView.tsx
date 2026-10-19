@@ -13,6 +13,8 @@ import {
 } from "../trialCriteria";
 import { searchICD10, DEMO_ICD10_CODES, type ICD10Entry } from "../icd10";
 import { icd11TextToCodes, type Icd11Candidate } from "../lib/icd11Api";
+import { CopyButton } from "../components/CopyButton";
+import { slotsFillPercent } from "../lib/savedTrials";
 import { ui } from "../ui";
 import {
   demoTrialDeadlineLocal,
@@ -789,13 +791,44 @@ export function TrialManagerView() {
 
             {myTrials.length > 0 && (
               <ul className={ui.list} data-testid="trial-manager-my-list">
-                {myTrials.map((t) => (
-                  <li key={t.trialId}>
-                    <code className={ui.code}>{t.trialId.slice(0, 16)}…</code> — slots {t.slotsFilled.toString()}/
-                    {t.slotsTotal.toString()} — {TRIAL_STATUS[t.status] ?? t.status} — min match ≥{" "}
-                    {(Number(t.eligibilityThresholdBps) / 100).toFixed(0)}%
-                  </li>
-                ))}
+                {myTrials.map((t) => {
+                  const selected = trialActionId === t.trialId.toLowerCase();
+                  return (
+                    <li key={t.trialId} className={`zk-trial-row${selected ? " is-selected" : ""}`}>
+                      <div className="zk-trial-row-main">
+                        <code className={ui.code}>{t.trialId.slice(0, 16)}…</code> — slots{" "}
+                        {t.slotsFilled.toString()}/{t.slotsTotal.toString()} —{" "}
+                        {TRIAL_STATUS[t.status] ?? t.status} — min match ≥{" "}
+                        {(Number(t.eligibilityThresholdBps) / 100).toFixed(0)}%
+                        <div
+                          className="zk-meter"
+                          role="progressbar"
+                          aria-label="Enrollment slots filled"
+                          aria-valuemin={0}
+                          aria-valuemax={100}
+                          aria-valuenow={slotsFillPercent(t.slotsFilled, t.slotsTotal)}
+                        >
+                          <div
+                            className="zk-meter-fill"
+                            style={{ width: `${slotsFillPercent(t.slotsFilled, t.slotsTotal)}%` }}
+                          />
+                        </div>
+                      </div>
+                      <div className="zk-trial-row-actions">
+                        <button
+                          type="button"
+                          className="zk-copy-btn"
+                          aria-pressed={selected}
+                          onClick={() => setTrialActionId(t.trialId.toLowerCase())}
+                          data-testid={`btn-use-trial-${t.trialId.slice(0, 8)}`}
+                        >
+                          {selected ? "Selected ✓" : "Use this trial"}
+                        </button>
+                        <CopyButton value={t.trialId} label="Copy ID" />
+                      </div>
+                    </li>
+                  );
+                })}
               </ul>
             )}
 

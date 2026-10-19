@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { CopyButton } from "../components/CopyButton";
 import { DisclosureSummary } from "../components/patient/DisclosureSummary";
 import { proofExpiresInLabel } from "../components/patient/patientCardUtils";
 import { useZKClinic } from "../contexts/ZKClinicContext";
@@ -313,7 +314,8 @@ export function TrialBrowseView({
             <strong>{lastPostedProof.trialTitle}</strong>
           </p>
           <p className={ui.msgMuted} style={{ margin: "0.35rem 0 0", fontSize: "0.875rem" }}>
-            Proof ID <code className={ui.code}>{lastPostedProof.proofId}</code>
+            Proof ID <code className={ui.code}>{lastPostedProof.proofId}</code>{" "}
+            <CopyButton value={lastPostedProof.proofId} label="Copy proof ID" data-testid="btn-copy-proof-id" />
             {" · "}
             Trial pseudonym <code className={ui.code}>{lastPostedProof.pseudonym}</code>
           </p>

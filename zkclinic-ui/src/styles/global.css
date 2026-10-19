@@ -1608,3 +1608,105 @@ select.zk-input {
     display: none;
   }
 }
+
+/* --- Copy buttons, trial rows, API status pill --- */
+.zk-copy-btn {
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--zk-border-strong);
+  background: var(--zk-surface);
+  color: var(--zk-ink);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.zk-copy-btn:hover,
+.zk-copy-btn:focus-visible {
+  border-color: var(--zk-green);
+  color: var(--zk-green-dark);
+}
+.zk-copy-btn[aria-pressed="true"] {
+  background: var(--zk-green-soft);
+  border-color: var(--zk-green);
+  color: var(--zk-green-dark);
+}
+:root[data-theme="dark"] .zk-copy-btn:hover,
+:root[data-theme="dark"] .zk-copy-btn[aria-pressed="true"] {
+  color: #c9d8a4;
+}
+.zk-trial-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  border: 1px solid var(--zk-border);
+  border-radius: var(--zk-radius-sm);
+  background: var(--zk-surface);
+  list-style: none;
+}
+.zk-trial-row.is-selected {
+  border-color: var(--zk-green);
+  background: var(--zk-green-soft);
+}
+.zk-trial-row-main .zk-meter {
+  margin-top: 8px;
+  max-width: 260px;
+}
+.zk-trial-row-actions {
+  display: flex;
+  gap: 8px;
+}
+.zk-api-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--zk-border-strong);
+  background: var(--zk-surface);
+  color: var(--zk-muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.zk-api-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--zk-muted);
+}
+.zk-api-badge--online .zk-api-dot {
+  background: var(--zk-green);
+}
+.zk-api-badge--waking {
+  color: #8a5300;
+  border-color: #e8c27a;
+}
+.zk-api-badge--waking .zk-api-dot {
+  background: #d99a1e;
+  animation: zk-api-pulse 1.2s ease-in-out infinite;
+}
+:root[data-theme="dark"] .zk-api-badge--waking {
+  color: #f0c36b;
+  border-color: #6b4f1a;
+}
+@keyframes zk-api-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .zk-api-badge--waking .zk-api-dot {
+    animation: none;
+  }
+}
+@media (max-width: 720px) {
+  .zk-api-badge {
+    display: none;
+  }
+}

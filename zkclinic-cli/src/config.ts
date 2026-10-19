@@ -56,7 +56,14 @@ export class PreprodConfig implements Config {
   networkId = "preprod";
 
   constructor() {
+    // Midnight-hosted preprod indexer/RPC were retired on 2026-10-09; Blockfrost is the provider now.
+    const projectId = process.env.BLOCKFROST_PROJECT_ID?.trim();
+    if (projectId) {
+      const token = encodeURIComponent(projectId);
+      this.indexer = `https://midnight-preprod.blockfrost.io/api/v0?project_id=${token}`;
+      this.indexerWS = `wss://midnight-preprod.blockfrost.io/api/v0/ws?project_id=${token}`;
+      this.node = `https://rpc.midnight-preprod.blockfrost.io?project_id=${token}`;
+    }
     setNetworkId(this.networkId);
   }
 }
-

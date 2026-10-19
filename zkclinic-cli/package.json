@@ -10,7 +10,8 @@
     "standalone": "tsx src/standalone.ts",
     "build": "rm -rf dist && tsc --project tsconfig.build.json",
     "test": "vitest run",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "deploy": "tsx src/deploy.ts"
   },
   "dependencies": {
     "@midnight-ntwrk/compact-js": "2.4.0",
