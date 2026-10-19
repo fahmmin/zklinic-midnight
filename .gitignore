@@ -1,0 +1,13 @@
+node_modules
+dist
+.env
+*.log
+*.pdf
+cli-logs.txt   
+plan.md
+.vercel
+
+# local state / test output
+midnight-level-db/
+test-results/
+playwright-report/

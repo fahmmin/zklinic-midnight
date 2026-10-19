@@ -1,0 +1,248 @@
+pragma language_version 0.21;
+import CompactStandardLibrary;
+
+export enum IssuerStatus {
+    None,
+    Pending,
+    Approved,
+    Revoked,
+}
+
+export struct IssuerRecord {
+    doctorKey: ZswapCoinPublicKey;
+    licenseHash: Bytes<32>;
+    attestationHash: Bytes<32>;
+    issuerVerificationHash: Bytes<32>;
+    status: IssuerStatus;
+    submittedAt: Uint<64>;
+    approvedAt: Uint<64>;
+    revokedAt: Uint<64>;
+}
+
+constructor() {
+    admin = ownPublicKey();
+}
+
+export ledger admin: ZswapCoinPublicKey;
+export ledger pendingIssuers: Map<ZswapCoinPublicKey, Bytes<32>>;
+export ledger issuers: Map<ZswapCoinPublicKey, IssuerRecord>;
+// Milestone 2: Credential revocation - credentialId -> issuer, revoked set
+export ledger issuedCredentials: Map<Bytes<32>, ZswapCoinPublicKey>;
+export ledger revokedCredentials: Set<Bytes<32>>;
+/** Next slot index per card for diagnosis commitments (flat map; slot key derived from credentialId + index). */
+export ledger credentialDiagnosisNextIndex: Map<Bytes<32>, Uint<64>>;
+export ledger diagnosisCommitmentBySlot: Map<Bytes<32>, Bytes<32>>;
+
+// Milestone 3: Trial registry — manager posts trials; slots + criteria hash on-chain
+export enum TrialStatus {
+    Open,
+    Closed,
+    Full,
+}
+
+export struct TrialRecord {
+    manager: ZswapCoinPublicKey;
+    slotsTotal: Uint<64>;
+    slotsFilled: Uint<64>;
+    deadline: Uint<64>;
+    status: TrialStatus;
+    criteriaHash: Bytes<32>;
+    /** Basis points: 10000 = 100%. Off-chain matching uses same threshold (default 7500 = 75%). */
+    eligibilityThresholdBps: Uint<64>;
+}
+
+export ledger trials: Map<Bytes<32>, TrialRecord>;
+
+export circuit submitIssuerRequest(licenseHash: Bytes<32>): [] {
+    const caller = ownPublicKey();
+    assert(!pendingIssuers.member(caller), "Issuer request already pending");
+
+    if (issuers.member(caller)) {
+        const record = issuers.lookup(caller);
+        assert(record.status != IssuerStatus.Approved, "Issuer already approved");
+    }
+
+    pendingIssuers.insert(disclose(caller), disclose(licenseHash));
+    return [];
+}
+
+export circuit approveIssuer(doctor: ZswapCoinPublicKey, attestationHash: Bytes<32>, issuerVerificationHash: Bytes<32>): [] {
+    assert(ownPublicKey() == admin, "Only admin can approve issuer");
+    assert(pendingIssuers.member(disclose(doctor)), "Issuer request not found");
+
+    const hash = pendingIssuers.lookup(disclose(doctor));
+    const record = IssuerRecord {
+        doctorKey: doctor,
+        licenseHash: hash,
+        attestationHash: attestationHash,
+        issuerVerificationHash: issuerVerificationHash,
+        status: IssuerStatus.Approved,
+        submittedAt: 0,
+        approvedAt: 0,
+        revokedAt: 0,
+    };
+
+    issuers.insert(disclose(doctor), disclose(record));
+    pendingIssuers.remove(disclose(doctor));
+    return [];
+}
+
+export circuit revokeIssuer(doctor: ZswapCoinPublicKey): [] {
+    assert(ownPublicKey() == admin, "Only admin can revoke issuer");
+    assert(issuers.member(disclose(doctor)), "Issuer not found");
+    const current = issuers.lookup(disclose(doctor));
+
+    const updated = IssuerRecord {
+        doctorKey: current.doctorKey,
+        licenseHash: current.licenseHash,
+        attestationHash: current.attestationHash,
+        issuerVerificationHash: current.issuerVerificationHash,
+        status: IssuerStatus.Revoked,
+        submittedAt: current.submittedAt,
+        approvedAt: current.approvedAt,
+        revokedAt: 0,
+    };
+
+    issuers.insert(disclose(doctor), disclose(updated));
+    return [];
+}
+
+export circuit transferAdmin(newAdmin: ZswapCoinPublicKey): [] {
+    assert(ownPublicKey() == admin, "Only admin can transfer admin role");
+    admin = disclose(newAdmin);
+    return [];
+}
+
+// Milestone 2: Credential Engine - doctor registers credential when issuing
+export circuit registerCredential(credentialId: Bytes<32>): [] {
+    const caller = ownPublicKey();
+    assert(issuers.member(disclose(caller)), "Caller is not a registered issuer");
+    const record = issuers.lookup(disclose(caller));
+    assert(record.status == IssuerStatus.Approved, "Issuer must be approved to register credentials");
+    assert(!issuedCredentials.member(disclose(credentialId)), "Credential already registered");
+    issuedCredentials.insert(disclose(credentialId), disclose(caller));
+    return [];
+}
+
+circuit diagnosisSlotKey(credentialId: Bytes<32>, slot: Uint<64>): Bytes<32> {
+    const slotBytes = persistentHash<Uint<64>>(disclose(slot));
+    return persistentHash<Vector<2, Bytes<32>>>([disclose(credentialId), slotBytes]);
+}
+
+circuit nextDiagnosisSlotForCard(credentialId: Bytes<32>): Uint<64> {
+    if (credentialDiagnosisNextIndex.member(disclose(credentialId))) {
+        return credentialDiagnosisNextIndex.lookup(disclose(credentialId));
+    }
+    return 0 as Uint<64>;
+}
+
+/** Append a doctor-signed diagnosis visit commitment to an existing card (same issuing doctor only). */
+export circuit appendDiagnosisToCredential(credentialId: Bytes<32>, entryCommitment: Bytes<32>): [] {
+    const caller = ownPublicKey();
+    assert(issuers.member(disclose(caller)), "Caller is not a registered issuer");
+    const record = issuers.lookup(disclose(caller));
+    assert(record.status == IssuerStatus.Approved, "Issuer must be approved to append diagnoses");
+    assert(issuedCredentials.member(disclose(credentialId)), "Credential not registered");
+    assert(!revokedCredentials.member(disclose(credentialId)), "Credential revoked");
+    const issuer = issuedCredentials.lookup(disclose(credentialId));
+    assert(issuer == caller, "Only the issuing doctor can append to this card");
+    const nextIdx = nextDiagnosisSlotForCard(disclose(credentialId));
+    const slotKey = diagnosisSlotKey(disclose(credentialId), nextIdx);
+    assert(!diagnosisCommitmentBySlot.member(disclose(slotKey)), "Diagnosis slot collision");
+    diagnosisCommitmentBySlot.insert(disclose(slotKey), disclose(entryCommitment));
+    credentialDiagnosisNextIndex.insert(disclose(credentialId), (nextIdx + (1 as Uint<64>)) as Uint<64>);
+    return [];
+}
+
+// Milestone 2: Doctor revokes an incorrectly issued credential
+export circuit revokeCredential(credentialId: Bytes<32>): [] {
+    const caller = ownPublicKey();
+    assert(issuers.member(disclose(caller)), "Caller is not a registered issuer");
+    const record = issuers.lookup(disclose(caller));
+    assert(record.status == IssuerStatus.Approved, "Issuer must be approved to revoke credentials");
+    assert(issuedCredentials.member(disclose(credentialId)), "Credential not found");
+    const issuer = issuedCredentials.lookup(disclose(credentialId));
+    assert(issuer == caller, "Only the issuing doctor can revoke this credential");
+    revokedCredentials.insert(disclose(credentialId));
+    return [];
+}
+
+// Milestone 3: Trial manager creates a trial (caller becomes manager)
+export circuit createTrial(
+    trialId: Bytes<32>,
+    slotsTotal: Uint<64>,
+    deadline: Uint<64>,
+    criteriaHash: Bytes<32>,
+    eligibilityThresholdBps: Uint<64>
+): [] {
+    const caller = ownPublicKey();
+    assert(!trials.member(disclose(trialId)), "Trial id already exists");
+    assert(slotsTotal > 0, "Slots must be positive");
+    assert(eligibilityThresholdBps > 0, "Threshold must be positive");
+    assert(eligibilityThresholdBps <= 10000, "Threshold cannot exceed 100%");
+    const record = TrialRecord {
+        manager: caller,
+        slotsTotal: slotsTotal,
+        slotsFilled: 0,
+        deadline: deadline,
+        status: TrialStatus.Open,
+        criteriaHash: criteriaHash,
+        eligibilityThresholdBps: eligibilityThresholdBps,
+    };
+    trials.insert(disclose(trialId), disclose(record));
+    return [];
+}
+
+export circuit closeTrial(trialId: Bytes<32>): [] {
+    const caller = ownPublicKey();
+    assert(trials.member(disclose(trialId)), "Trial not found");
+    const t = trials.lookup(disclose(trialId));
+    assert(t.manager == caller, "Only trial manager can close");
+    assert(t.status == TrialStatus.Open, "Trial not open");
+    const updated = TrialRecord {
+        manager: t.manager,
+        slotsTotal: t.slotsTotal,
+        slotsFilled: t.slotsFilled,
+        deadline: t.deadline,
+        status: TrialStatus.Closed,
+        criteriaHash: t.criteriaHash,
+        eligibilityThresholdBps: t.eligibilityThresholdBps,
+    };
+    trials.insert(disclose(trialId), disclose(updated));
+    return [];
+}
+
+// Milestone 3: Manager records one enrollment (demo / off-chain verified patient)
+export circuit recordEnrollment(trialId: Bytes<32>): [] {
+    const caller = ownPublicKey();
+    assert(trials.member(disclose(trialId)), "Trial not found");
+    const t = trials.lookup(disclose(trialId));
+    assert(t.manager == caller, "Only trial manager can record enrollment");
+    assert(t.status == TrialStatus.Open, "Trial not open");
+    assert(t.slotsFilled < t.slotsTotal, "No slots left");
+    const newFilled = (t.slotsFilled + 1) as Uint<64>;
+    if (newFilled == t.slotsTotal) {
+        const updated = TrialRecord {
+            manager: t.manager,
+            slotsTotal: t.slotsTotal,
+            slotsFilled: newFilled,
+            deadline: t.deadline,
+            status: TrialStatus.Full,
+            criteriaHash: t.criteriaHash,
+            eligibilityThresholdBps: t.eligibilityThresholdBps,
+        };
+        trials.insert(disclose(trialId), disclose(updated));
+    } else {
+        const updated = TrialRecord {
+            manager: t.manager,
+            slotsTotal: t.slotsTotal,
+            slotsFilled: newFilled,
+            deadline: t.deadline,
+            status: TrialStatus.Open,
+            criteriaHash: t.criteriaHash,
+            eligibilityThresholdBps: t.eligibilityThresholdBps,
+        };
+        trials.insert(disclose(trialId), disclose(updated));
+    }
+    return [];
+}

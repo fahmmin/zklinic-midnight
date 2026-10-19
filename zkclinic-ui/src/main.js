@@ -1,0 +1,17 @@
+import { jsx as _jsx } from "react/jsx-runtime";
+import "./globals";
+import React from "react";
+import { initNeopopTheme } from "./neopop/initNeopop";
+import { createRoot } from "react-dom/client";
+import { setNetworkId } from "@midnight-ntwrk/midnight-js-network-id";
+import { BrowserRouter } from "react-router-dom";
+import { App } from "./App";
+import { ThemeProvider } from "./contexts/ThemeContext";
+import { ZKClinicProvider } from "./contexts/ZKClinicContext";
+import "./index.css";
+import "./styles/global.css";
+import "@midnight-ntwrk/dapp-connector-api";
+const networkId = (import.meta.env.VITE_NETWORK_ID || "preview");
+setNetworkId(networkId);
+initNeopopTheme();
+createRoot(document.getElementById("root")).render(_jsx(React.StrictMode, { children: _jsx(BrowserRouter, { children: _jsx(ThemeProvider, { children: _jsx(ZKClinicProvider, { children: _jsx(App, {}) }) }) }) }));

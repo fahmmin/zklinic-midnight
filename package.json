@@ -1,0 +1,67 @@
+{
+  "name": "zkclinic",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "workspaces": [
+    "zkclinic-cli",
+    "zkclinic-ui",
+    "contract",
+    "zkclinic-verification-api"
+  ],
+  "scripts": {
+    "cli:preview": "npm run preview -w zkclinic-cli",
+    "cli:preprod": "npm run preprod -w zkclinic-cli",
+    "cli:standalone": "npm run standalone -w zkclinic-cli",
+    "build": "npm run build -w contract && npm run build -w zkclinic-cli && npm run build -w zkclinic-ui && npm run build -w zkclinic-verification-api",
+    "test": "npm run test -w contract && npm run test -w zkclinic-cli && npm run test -w zkclinic-ui && npm run test -w zkclinic-verification-api",
+    "test:e2e": "npm run test:e2e -w zkclinic-ui",
+    "typecheck": "npm run typecheck -w contract && npm run typecheck -w zkclinic-cli && npm run typecheck -w zkclinic-ui && npm run typecheck -w zkclinic-verification-api"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.1",
+    "@types/node": "^25.0.1",
+    "@typescript-eslint/eslint-plugin": "^8.48.1",
+    "@typescript-eslint/parser": "^8.49.0",
+    "eslint": "^9.39.1",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-prettier": "^5.5.4",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.15"
+  },
+  "dependencies": {
+    "@midnight-ntwrk/compact-js": "2.4.0",
+    "@midnight-ntwrk/compact-runtime": "0.14.0",
+    "@midnight-ntwrk/dapp-connector-api": "4.0.0",
+    "@midnight-ntwrk/ledger-v7": "7.0.0",
+    "@midnight-ntwrk/midnight-js-contracts": "3.1.0",
+    "@midnight-ntwrk/midnight-js-http-client-proof-provider": "3.1.0",
+    "@midnight-ntwrk/midnight-js-indexer-public-data-provider": "3.1.0",
+    "@midnight-ntwrk/midnight-js-level-private-state-provider": "3.1.0",
+    "@midnight-ntwrk/midnight-js-network-id": "3.1.0",
+    "@midnight-ntwrk/midnight-js-node-zk-config-provider": "3.1.0",
+    "@midnight-ntwrk/midnight-js-types": "3.1.0",
+    "@midnight-ntwrk/midnight-js-utils": "3.1.0",
+    "@midnight-ntwrk/wallet-sdk-abstractions": "1.0.0",
+    "@midnight-ntwrk/wallet-sdk-address-format": "3.0.0",
+    "@midnight-ntwrk/wallet-sdk-dust-wallet": "1.0.0",
+    "@midnight-ntwrk/wallet-sdk-facade": "1.0.0",
+    "@midnight-ntwrk/wallet-sdk-hd": "3.0.0",
+    "@midnight-ntwrk/wallet-sdk-shielded": "1.0.0",
+    "@midnight-ntwrk/wallet-sdk-unshielded-wallet": "1.0.0",
+    "@scure/bip39": "^2.0.1",
+    "dotenv": "^17.2.3",
+    "pino": "^10.1.0",
+    "pino-pretty": "^13.1.3",
+    "rxjs": "^7.8.1"
+  },
+  "resolutions": {
+    "@midnight-ntwrk/ledger-v7": "7.0.0",
+    "@midnight-ntwrk/midnight-js-network-id": "3.1.0",
+    "@midnight-ntwrk/compact-runtime": "0.14.0"
+  }
+}
