@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ZKLinic pitch deck</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700&family=DM+Mono:wght@500&display=swap" rel="stylesheet">
+<style>
+  @page { size: 1920px 1080px; margin: 0; }
+  :root { --bg:#f4f3ef; --ink:#141414; --muted:#55554f; --olive:#6b7c3a; --olive-dark:#4a5a28; --mist:#e8ecdf; --line:rgba(20,20,20,.12); }
+  * { box-sizing: border-box; }
+  html, body { margin:0; background:var(--bg); color:var(--ink); font-family:"DM Sans",system-ui,sans-serif; }
+  .slide { width:1920px; height:1080px; padding:110px 140px; position:relative; overflow:hidden; page-break-after:always; display:flex; flex-direction:column; }
+  .slide:last-child { page-break-after:auto; }
+  .kicker { font-size:30px; font-weight:500; color:var(--olive); margin:0 0 28px; }
+  h1 { font-size:120px; line-height:1; letter-spacing:-.03em; margin:0 0 36px; font-weight:700; }
+  h2 { font-size:76px; line-height:1.04; letter-spacing:-.02em; margin:0 0 44px; font-weight:700; max-width:1400px; }
+  p, li { font-size:34px; line-height:1.45; color:var(--muted); }
+  p { margin:0 0 22px; max-width:1100px; }
+  ul { margin:0; padding:0; list-style:none; }
+  li { padding:14px 0 14px 34px; position:relative; }
+  li::before { content:""; position:absolute; left:0; top:32px; width:12px; height:12px; border-radius:50%; background:var(--olive); }
+  strong { color:var(--ink); font-weight:700; }
+  code { font-family:"DM Mono",monospace; font-size:.82em; color:var(--olive-dark); }
+  .split { display:grid; grid-template-columns:1fr auto; gap:90px; align-items:center; flex:1; }
+  .phones { display:flex; gap:40px; align-items:flex-start; }
+  .phone { height:820px; border-radius:58px; box-shadow:0 30px 70px rgba(20,20,20,.18); }
+  .phone.sm { height:700px; border-radius:50px; }
+  figure { margin:0; text-align:center; }
+  figcaption { font-size:26px; color:var(--muted); margin-top:22px; }
+  .cols { display:grid; grid-template-columns:repeat(3,1fr); gap:44px; margin-top:10px; }
+  .col { background:#fff; border:1px solid var(--line); border-radius:28px; padding:44px 44px 36px; }
+  .col h3 { font-size:40px; margin:0 0 18px; }
+  .col p { font-size:29px; margin:0 0 18px; }
+  .tag { display:inline-block; font-size:24px; font-weight:500; padding:8px 18px; border-radius:999px; margin:0 10px 10px 0; }
+  .pub { background:#fff; border:1px solid var(--line); color:var(--ink); }
+  .priv { background:var(--mist); color:var(--olive-dark); }
+  table { border-collapse:collapse; width:100%; font-size:30px; }
+  td { padding:22px 26px; border-top:1px solid var(--line); vertical-align:top; color:var(--muted); }
+  td:first-child { color:var(--ink); font-weight:700; width:38%; }
+  .stats { display:grid; grid-template-columns:repeat(4,1fr); gap:36px; margin:20px 0 60px; }
+  .stat b { display:block; font-size:110px; line-height:1; letter-spacing:-.03em; color:var(--ink); }
+  .stat span { font-size:28px; color:var(--muted); }
+  .cover { background:var(--olive-dark); color:#fff; }
+  .cover h1, .cover strong { color:#fff; }
+  .cover p { color:rgba(255,255,255,.82); font-size:44px; max-width:960px; }
+  .cover .kicker { color:#cfd9b4; }
+  .foot { position:absolute; left:140px; bottom:60px; font-size:24px; color:var(--muted); }
+  .cover .foot { color:rgba(255,255,255,.7); }
+  .links div p { font-size:40px; color:var(--ink); }
+</style>
+</head>
+<body>
+
+<section class="slide cover">
+  <div class="split">
+    <div>
+      <p class="kicker">Built on Midnight. Wave 3 submission.</p>
+      <h1>ZKLinic</h1>
+      <p>Join a clinical trial without handing over your medical records.</p>
+    </div>
+    <img class="phone" src="img/qualify.jpg" alt="Patient screen: Yes, you qualify">
+  </div>
+  <div class="foot">zklinic.vercel.app &nbsp;&nbsp; github.com/fahmmin/zklinic-midnight</div>
+</section>
+
+<section class="slide">
+  <p class="kicker">The problem</p>
+  <h2>Most clinical trials can't find enough patients in time.</h2>
+  <p>About 85% of trials miss their recruitment timelines. The patients exist, but to be considered they hand their whole medical record to a sponsor they have never met.</p>
+  <p>So most never apply, and sponsors spend months screening people who don't qualify.</p>
+  <p><strong>Patients need to prove they fit without becoming a data source.</strong></p>
+</section>
+
+<section class="slide">
+  <p class="kicker">How it works</p>
+  <h2>A doctor signs it. The phone proves it. The study sees a code name.</h2>
+  <div class="cols">
+    <div class="col">
+      <h3>Doctor</h3>
+      <p>Checks the patient and signs a health card: age, diagnoses, lab results. Only a hash of the card goes on-chain.</p>
+      <span class="tag pub">Card hash public</span>
+    </div>
+    <div class="col">
+      <h3>Patient</h3>
+      <p>Keeps the card on their phone. The phone proves the study's rules are met in a zero-knowledge proof.</p>
+      <span class="tag priv">Age, diagnosis, labs stay private</span>
+    </div>
+    <div class="col">
+      <h3>Study team</h3>
+      <p>Publishes who can join. Enrolls verified code names, never names or records.</p>
+      <span class="tag pub">Rules public</span><span class="tag priv">Identity private</span>
+    </div>
+  </div>
+</section>
+
+<section class="slide">
+  <p class="kicker">The patient's view</p>
+  <div class="phones" style="justify-content:center;flex:1;align-items:center">
+    <figure><img class="phone sm" src="img/qualify.jpg" alt=""><figcaption>Asha, 52, qualifies</figcaption></figure>
+    <figure><img class="phone sm" src="img/enrolled.jpg" alt=""><figcaption>She joins under a code name</figcaption></figure>
+    <figure><img class="phone sm" src="img/rejected.jpg" alt=""><figcaption>Ravi, 71, doesn't. Nothing is published.</figcaption></figure>
+  </div>
+</section>
+
+<section class="slide">
+  <p class="kicker">On Midnight</p>
+  <h2>The eligibility check is a Compact circuit, not a server.</h2>
+  <table>
+    <tr><td><code>issueCredentialCommitment</code></td><td>A registered doctor adds the card's commitment to a Merkle tree.</td></tr>
+    <tr><td><code>publishTrialCriteria</code></td><td>The study's rules go on-chain and can't be changed afterwards.</td></tr>
+    <tr><td><code>proveEligibility</code></td><td>Four private witnesses, membership in the commitment tree, and a per-trial nullifier so one card counts once.</td></tr>
+    <tr><td><code>recordEnrollment</code></td><td>Only a verified proof can take a place in the study.</td></tr>
+  </table>
+</section>
+
+<section class="slide">
+  <div class="split">
+    <div>
+      <p class="kicker">Built for real people, phone first</p>
+      <h2>Sign in with a wallet. One role each.</h2>
+      <ul>
+        <li>The 1AM wallet is the account: one tap, no email or password.</li>
+        <li>Patients and study teams pick their role once; doctors are recognised from the chain.</li>
+        <li>Doctors prove who they are with their medical ID and a Didit check. Only a hash is kept.</li>
+      </ul>
+    </div>
+    <div class="phones">
+      <img class="phone sm" src="img/roles.jpg" alt="Role picker">
+      <img class="phone sm" src="img/doctor.jpg" alt="Doctor sign-up with Didit">
+    </div>
+  </div>
+</section>
+
+<section class="slide">
+  <p class="kicker">What changed in Wave 3</p>
+  <h2>The privacy claim is now enforced on-chain.</h2>
+  <ul>
+    <li><strong>Private eligibility proofs</strong> replace Wave 2's off-chain check reported to an API.</li>
+    <li><strong>Ported to Midnight's ledger v9 hard fork</strong> and redeployed on Preprod; 1AM proves, pays and submits.</li>
+    <li><strong>Wallet sign-in, one role per person</strong>, mobile-first three-step screens and a 1-minute guided demo.</li>
+    <li><strong>Didit identity check</strong> for doctors, and the backend now runs on Cloudflare.</li>
+  </ul>
+</section>
+
+<section class="slide">
+  <p class="kicker">Engineering and quality</p>
+  <h2>Tests run the compiled contract.</h2>
+  <div class="stats">
+    <div class="stat"><b>40</b><span>contract tests</span></div>
+    <div class="stat"><b>19</b><span>API tests</span></div>
+    <div class="stat"><b>17</b><span>web app tests</span></div>
+    <div class="stat"><b>7</b><span>CLI tests</span></div>
+  </div>
+  <p>Plus browser tests on desktop and phone sizes, and CI that compiles the contract on every push.</p>
+  <p>Preprod contract <code>76099957e2d62de2587a4c0c7b6797715be6c5f9d03590a5443e39f27e2dfb55</code></p>
+</section>
+
+<section class="slide">
+  <p class="kicker">Business</p>
+  <h2>Sponsors pay for verified patients, not for data.</h2>
+  <ul>
+    <li><strong>Who pays:</strong> trial sponsors and research organisations, a fee per verified enrollment.</li>
+    <li><strong>Free for patients and doctors</strong>, so supply grows without friction.</li>
+    <li><strong>Start narrow:</strong> diabetes studies with doctors on India's NMC register, which the doctor check already reads.</li>
+    <li><strong>Why it wins:</strong> sponsors get pre-qualified candidates without holding health data they must protect.</li>
+  </ul>
+</section>
+
+<section class="slide links">
+  <p class="kicker">Next</p>
+  <h2>From Preprod to a first pilot.</h2>
+  <ul>
+    <li>Non-revocation proofs for anonymous cards, and key backup for patients.</li>
+    <li>More doctor registers beyond India, richer lab and medication rules.</li>
+    <li>Security review, mainnet, and a pilot with one trial sponsor.</li>
+  </ul>
+  <div style="margin-top:auto">
+    <p>Try it: zklinic.vercel.app/demo</p>
+    <p>Code: github.com/fahmmin/zklinic-midnight</p>
+  </div>
+</section>
+
+</body>
+</html>

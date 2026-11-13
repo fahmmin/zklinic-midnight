@@ -1,9 +1,11 @@
 # ZKLinic
 
-[![CI](https://github.com/fahmmin/zklinic/actions/workflows/ci.yml/badge.svg)](https://github.com/fahmmin/zklinic/actions/workflows/ci.yml)
+[![CI](https://github.com/fahmmin/zklinic-midnight/actions/workflows/ci.yml/badge.svg)](https://github.com/fahmmin/zklinic-midnight/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
 **Prove you qualify for a clinical trial without showing anyone your medical record.** Built on [Midnight](https://midnight.network).
+
+**Live app:** [zklinic.vercel.app](https://zklinic.vercel.app) ([1-minute demo](https://zklinic.vercel.app/demo)) &nbsp; **Demo video:** [youtu.be/Otq5nMSLeAU](https://youtu.be/Otq5nMSLeAU) &nbsp; **Pitch deck:** [docs/ZKLinic-deck.pdf](docs/ZKLinic-deck.pdf)
 
 Most clinical trials miss their recruitment targets. Eligible patients exist, but finding them means asking people to hand a full medical chart to a sponsor they have never met. ZKLinic removes that step: a licensed doctor attests a patient's health facts once, and the patient then proves "I meet this trial's criteria" in zero knowledge. The recruiter learns that an anonymous applicant is eligible. Nothing else.
 
