@@ -6,8 +6,7 @@ dist
 cli-logs.txt   
 plan.md
 .vercel
+.claude
 
-# local state / test output
-midnight-level-db/
-test-results/
-playwright-report/
+# Vite per-machine overrides
+*.local

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, type ReactNode } from "react";
 import { useZKClinic } from "../contexts/ZKClinicContext";
+import { zkPublicKeyHex } from "../lib/zkIdentity";
 import { decryptCredential, type HealthCredentialPayload, type PatientIntakeV1 } from "../credential";
 import {
   getStoredCredentials,
@@ -9,6 +10,7 @@ import { PatientHistoryCard } from "../components/patient/PatientHistoryCard";
 import { formatShortId } from "../components/patient/patientCardUtils";
 import { DEMO_PATIENT_ASSIST_PROMPT } from "../lib/demoWorkspaceMocks";
 import { friendlyErrorMessage } from "../lib/friendlyErrors";
+import { Steps } from "../components/Steps";
 import { ui } from "../ui";
 import { TrialBrowseView } from "./TrialBrowseView";
 
@@ -78,20 +80,6 @@ function scrollToPatientSection(id: string) {
   document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-function PatientSectionLink({ id, children }: { id: string; children: ReactNode }) {
-  return (
-    <a
-      href={`#${id}`}
-      className="zk-patient-sidebar__link"
-      onClick={(e) => {
-        e.preventDefault();
-        scrollToPatientSection(id);
-      }}
-    >
-      {children}
-    </a>
-  );
-}
 
 function intakeRowsFromPatientIntake(pi: PatientIntakeV1): ConditionRow[] {
   return (pi.conditions ?? [])
@@ -193,6 +181,7 @@ export function PatientView() {
 
   const [requestCode, setRequestCode] = useState("");
   const [fetchCode, setFetchCode] = useState("");
+  const [step, setStep] = useState(() => (getStoredCredentials().length > 0 ? 2 : 0));
   const [stored, setStored] = useState<StoredCredentialMeta[]>([]);
   const [revokedAmongStored, setRevokedAmongStored] = useState<string[]>([]);
   const [createdCode, setCreatedCode] = useState<string | null>(null);
@@ -445,8 +434,14 @@ export function PatientView() {
         continueExistingCard && selectedCardId.trim()
           ? selectedCardId.trim().replace(/^0x/i, "").toLowerCase()
           : undefined;
-      const { requestCode: code } = await createCredentialRequest(undefined, intake, continuingHex);
+      const { requestCode: code } = await createCredentialRequest(
+        undefined,
+        { ...intake, zkPublicKey: zkPublicKeyHex() },
+        continuingHex
+      );
       setCreatedCode(code);
+      setFetchCode(code); // step 2 is prefilled
+      localStorage.setItem("zkclinic-last-request-code", code); // prefills the doctor screen on this device
     } catch (e) {
       setError(friendlyErrorMessage(e instanceof Error ? e.message : String(e)));
     }
@@ -462,6 +457,7 @@ export function PatientView() {
       await fetchAndStoreCredential(fetchCode.trim());
       reloadStored();
       setFetchCode("");
+      setStep(2);
     } catch (e) {
       setError(friendlyErrorMessage(e instanceof Error ? e.message : String(e)));
     }
@@ -470,80 +466,8 @@ export function PatientView() {
   return (
     <section className={ui.section} data-testid="patient-view">
       <div className={ui.sectionInner}>
-        <div className="zk-patient-layout">
-          <aside className="zk-patient-sidebar" aria-label="Sections on this page">
-            <p className="zk-patient-sidebar__title">On this page</p>
-            <nav className="zk-patient-sidebar__nav">
-              <PatientSectionLink id="patient-overview">Overview</PatientSectionLink>
-              <PatientSectionLink id="patient-cards">Cards on this device</PatientSectionLink>
-              <PatientSectionLink id="patient-obtain">Obtain your card</PatientSectionLink>
-              <PatientSectionLink id="patient-health">Health details</PatientSectionLink>
-              <PatientSectionLink id="patient-step-1">Step 1 · Request code</PatientSectionLink>
-              <PatientSectionLink id="patient-step-2">Step 2 · Fetch card</PatientSectionLink>
-              <PatientSectionLink id="patient-trials">Trial matching</PatientSectionLink>
-            </nav>
-          </aside>
-          <div className="zk-patient-main">
-            <div data-testid="patient-gate" className="zk-patient-gate">
-              <div className="zk-patient-gate__hero">
-                <div id="patient-overview" className="zk-patient-anchor">
-                  <p className={ui.sectionTitle}>Patient · centerpiece</p>
-                  <h2 className={ui.h2}>Your lifetime health card — the anchor for matching</h2>
-                  <p className={ui.lead} style={{ maxWidth: "56ch" }}>
-                    ZKClinic is built around a <strong>doctor-backed health card</strong> on your device. For follow-up
-                    with the <strong>same</strong> clinician, check <strong>Continue selected health card</strong> when
-                    you create a request — the on-chain id stays fixed and each visit adds a signed diagnosis entry. You
-                    can still <strong>merge older text</strong> into the form for context. Use the card for{" "}
-                    <strong>trial matching</strong> without exposing your full record.
-                  </p>
-                </div>
-                <div id="patient-cards" className="zk-patient-hero-cards" data-testid="patient-hero-cards">
-                  <p className={ui.sectionTitle}>Your health card</p>
-                  <h3 className={ui.h2}>Cards on this device</h3>
-                  {stored.length === 0 ? (
-                    <div data-testid="patient-no-credentials">
-                      <p className={ui.lead}>No card yet — create a request and fetch after your doctor signs.</p>
-                      <p className={ui.msgMuted}>Nothing leaves this browser until you choose to run a trial check.</p>
-                    </div>
-                  ) : (
-                    <div className="zk-health-card-grid" data-testid="patient-credential-list">
-                      {stored.map((c) => (
-                        <PatientHistoryCard
-                          key={c.credentialId}
-                          meta={c}
-                          revoked={revokedAmongStored.includes(c.credentialId)}
-                          selected={c.credentialId === selectedCardId}
-                          onSelect={() => setSelectedCardId(c.credentialId)}
-                          proofRefreshKey={proofRefreshKey}
-                        />
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            <div id="patient-obtain" className="zk-patient-anchor">
-              <p className={ui.sectionTitle}>Obtain your card</p>
-        <h2 className={ui.h2}>Request & store your card</h2>
-        <p className={ui.lead}>
-          Create a code for your doctor. After delivery, fetch here — continuing the same card updates the stored
-          ciphertext in place. Or start a <strong>new</strong> card (leave the checkbox off). You can also{" "}
-          <strong>merge an older card into the form</strong> for free-text history. Data stays local until you prove
-          eligibility.
-        </p>
-
-        {!contractConnected && (
-          <div className={ui.warningPanel} data-testid="patient-no-contract-banner" style={{ marginBottom: "1rem" }}>
-            <p style={{ fontWeight: 700, marginBottom: "0.35rem" }}>Trial browse needs the contract</p>
-            <p style={{ fontSize: "0.8125rem", margin: 0 }}>
-              Request codes and fetching credentials work with the verification API alone. To browse trials and refresh
-              revocation from the chain, join a contract on <strong>Registry</strong> first.
-            </p>
-          </div>
-        )}
-
-        {flowMessage && (
+        <div data-testid="patient-gate">
+          {flowMessage && (
           <p className={ui.msgFlow} data-testid="patient-flow">
             {flowMessage}
           </p>
@@ -553,19 +477,52 @@ export function PatientView() {
             {error}
           </p>
         )}
+
+          <Steps labels={["Get a code", "Collect your card", "Find a study"]} step={step} onStep={setStep}>
+            <div>
+              <div id="patient-step-1" className="zk-patient-anchor">
+              <h3 className={ui.h2}>Get a code for your doctor</h3>
+              <p className={ui.lead}>Tap the button, then show or read the code to your doctor.</p>
+        {stored.length > 0 && (
+          <label
+            className={ui.msgMuted}
+            style={{ display: "flex", alignItems: "flex-start", gap: "0.5rem", marginBottom: "0.75rem", maxWidth: "48ch" }}
+          >
+            <input
+              type="checkbox"
+              checked={continueExistingCard}
+              onChange={(e) => setContinueExistingCard(e.target.checked)}
+              data-testid="patient-continue-card-checkbox"
+            />
+            <span>
+              <strong>Continue selected health card</strong> — same on-chain credential id; your doctor appends this
+              visit&apos;s diagnosis to that card (you must use the same doctor who issued it). Card:{" "}
+              <code className={ui.code}>{formatShortId(selectedCardId)}</code>
+            </span>
+          </label>
+        )}
+        <button
+          type="button"
+          className={ui.btnPrimary}
+          data-testid="btn-create-request"
+          onClick={handleCreateRequest}
+        >
+          Create my code
+        </button>
+        {createdCode && (
+          <div className={ui.highlight} data-testid="patient-request-code-box">
+            <p className={ui.highlightLabel}>Your code. Give it to your doctor.</p>
+            <div className="zk-big-code" data-testid="patient-request-code">
+              {createdCode}
             </div>
+          </div>
+        )}
 
-            <div className={ui.divider} />
-
-            <div id="patient-health" className="zk-patient-anchor">
-              <p className={ui.sectionTitle}>Health details (optional, private)</p>
-        <h3 className={ui.h2}>What goes on your card with the doctor&apos;s signature</h3>
-        <p className={ui.lead} style={{ maxWidth: "60ch" }}>
-          This stays off-chain: it is bundled into the encrypted payload your doctor delivers. Condition names you type
-          are <strong>not</strong> auto-mapped to ICD codes — you may enter optional ICD-10 hints, use the assistant
-          (may suggest codes when clearly inferable), and your doctor records authoritative ICD-10/ICD-11 codes when
-          they sign. Those codes are merged with your intake on the card.
-        </p>
+            </div>
+              <details className="zk-explain" style={{ marginTop: "1.25rem" }}>
+                <summary>Add health details for my doctor (optional)</summary>
+                <div id="patient-health" className="zk-patient-anchor">
+              <p className={ui.msgMuted}>Only your doctor sees this. It is added to your card, never to the public record.</p>
 
         {stored.length > 0 && (
           <div
@@ -830,57 +787,13 @@ export function PatientView() {
         </div>
 
             </div>
-
-            <div className={ui.divider} />
-
-            <div id="patient-step-1" className="zk-patient-anchor">
-              <p className={ui.sectionTitle}>Step 1</p>
-              <h3 className={ui.h2}>Create a request</h3>
-        {stored.length > 0 && (
-          <label
-            className={ui.msgMuted}
-            style={{ display: "flex", alignItems: "flex-start", gap: "0.5rem", marginBottom: "0.75rem", maxWidth: "48ch" }}
-          >
-            <input
-              type="checkbox"
-              checked={continueExistingCard}
-              onChange={(e) => setContinueExistingCard(e.target.checked)}
-              data-testid="patient-continue-card-checkbox"
-            />
-            <span>
-              <strong>Continue selected health card</strong> — same on-chain credential id; your doctor appends this
-              visit&apos;s diagnosis to that card (you must use the same doctor who issued it). Card:{" "}
-              <code className={ui.code}>{formatShortId(selectedCardId)}</code>
-            </span>
-          </label>
-        )}
-        <button
-          type="button"
-          className={ui.btnPrimary}
-          data-testid="btn-create-request"
-          onClick={handleCreateRequest}
-        >
-          Create request code
-        </button>
-        {createdCode && (
-          <div className={ui.highlight} data-testid="patient-request-code-box">
-            <p className={ui.highlightLabel}>Share with your doctor</p>
-            <div className={ui.codeBig} data-testid="patient-request-code">
-              {createdCode}
-            </div>
-          </div>
-        )}
-
+              </details>
             </div>
 
-            <div className={ui.divider} />
-
-            <div id="patient-step-2" className="zk-patient-anchor">
-              <p className={ui.sectionTitle}>Step 2</p>
-              <h3 className={ui.h2}>Fetch when ready</h3>
-        <p className={ui.msgMuted} style={{ marginBottom: "0.5rem" }}>
-          Re-enter the same request code you created in Step 1 — your doctor used it to deliver the signed credential.
-        </p>
+            <div>
+              <div id="patient-step-2" className="zk-patient-anchor">
+              <h3 className={ui.h2}>Collect your signed card</h3>
+        <p className={ui.lead}>Once your doctor has signed, tap the button. Your code is already filled in.</p>
         <div className={ui.inputRow}>
           <input
             className={ui.input}
@@ -896,7 +809,7 @@ export function PatientView() {
             onClick={handleFetchCredential}
             disabled={!fetchCode.trim()}
           >
-            Fetch & store
+            Collect my card
           </button>
         </div>
 
@@ -908,7 +821,7 @@ export function PatientView() {
             data-testid="btn-refresh-revocation"
             onClick={refreshState}
           >
-            Refresh revocation status →
+            Check my cards are still valid
           </button>
         )}
 
@@ -929,8 +842,37 @@ export function PatientView() {
         )}
 
             </div>
+            </div>
 
-            <div id="patient-trials" className="zk-patient-anchor">
+            <div>
+              <div id="patient-cards" className="zk-patient-hero-cards" data-testid="patient-hero-cards">
+                  <h3 className={ui.h2}>Find a study</h3>
+                  {stored.length === 0 ? (
+                    <div data-testid="patient-no-credentials">
+                      <p className={ui.lead}>You need a signed health card first. Go back to step 1.</p>
+                      <p className={ui.msgMuted}>Nothing leaves this browser until you choose to run a trial check.</p>
+                    </div>
+                  ) : (
+                    <div className="zk-health-card-grid" data-testid="patient-credential-list">
+                      {stored.map((c) => (
+                        <PatientHistoryCard
+                          key={c.credentialId}
+                          meta={c}
+                          revoked={revokedAmongStored.includes(c.credentialId)}
+                          selected={c.credentialId === selectedCardId}
+                          onSelect={() => setSelectedCardId(c.credentialId)}
+                          proofRefreshKey={proofRefreshKey}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              {!contractConnected && (
+          <div className={ui.warningPanel} data-testid="patient-no-contract-banner" style={{ marginBottom: "1rem" }}>
+            <p style={{ fontWeight: 700, margin: 0 }}>Tap Connect wallet at the top to see studies.</p>
+          </div>
+        )}
+              <div id="patient-trials" className="zk-patient-anchor">
               <TrialBrowseView
                 storedCredentials={stored}
                 selectedCredentialId={selectedCardId}
@@ -938,7 +880,8 @@ export function PatientView() {
                 onProofCreated={handleProofCreated}
               />
             </div>
-          </div>
+            </div>
+          </Steps>
         </div>
       </div>
     </section>

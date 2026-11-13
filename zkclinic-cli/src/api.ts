@@ -4,30 +4,54 @@ import { webcrypto } from "node:crypto";
 import * as Rx from "rxjs";
 import { wordlist as english } from "@scure/bip39/wordlists/english.js";
 import * as bip39 from "@scure/bip39";
-import * as ledger from "@midnight-ntwrk/ledger-v7";
+import * as ledger from "@midnight-ntwrk/midnight-js-protocol/v9";
 import { CompiledContract } from "@midnight-ntwrk/compact-js";
+import { ContractState } from "@midnight-ntwrk/midnight-js-protocol/v9/compact-runtime";
 import { deployContract, findDeployedContract } from "@midnight-ntwrk/midnight-js-contracts";
 import { httpClientProofProvider } from "@midnight-ntwrk/midnight-js-http-client-proof-provider";
 import { indexerPublicDataProvider } from "@midnight-ntwrk/midnight-js-indexer-public-data-provider";
 import { NodeZkConfigProvider } from "@midnight-ntwrk/midnight-js-node-zk-config-provider";
 import { levelPrivateStateProvider } from "@midnight-ntwrk/midnight-js-level-private-state-provider";
-import { HDWallet, Roles } from "@midnight-ntwrk/wallet-sdk-hd";
+import { WalletSeeds } from "@midnight-ntwrk/wallet-sdk-hd";
 import { WalletFacade } from "@midnight-ntwrk/wallet-sdk-facade";
 import { ShieldedWallet } from "@midnight-ntwrk/wallet-sdk-shielded";
 import { DustWallet } from "@midnight-ntwrk/wallet-sdk-dust-wallet";
+import { NoOpTransactionHistoryStorage, WalletTransaction } from "@midnight-ntwrk/wallet-sdk-abstractions";
+// The wallet SDK runs its own ledger-v9 copy (separate from midnight-js-protocol's), so txs cross as bytes into it.
+import { Transaction as WalletLedgerTransaction } from "@midnightntwrk/ledger-v9";
 import {
   createKeystore,
-  InMemoryTransactionHistoryStorage,
   PublicKey as UnshieldedPublicKey,
   type UnshieldedKeystore,
   UnshieldedWallet
 } from "@midnight-ntwrk/wallet-sdk-unshielded-wallet";
-import type { MidnightProvider, UnboundTransaction, WalletProvider } from "@midnight-ntwrk/midnight-js-types";
+import {
+  createLedger9MidnightProvider,
+  createLedger9WalletProvider,
+  type MidnightProvider,
+  type WalletProvider
+} from "@midnight-ntwrk/midnight-js-types";
 import { assertIsContractAddress } from "@midnight-ntwrk/midnight-js-utils";
 import { WebSocket } from "ws";
-import { ZKClinic } from "zkclinic-contract";
+import {
+  attributesFromJson,
+  createZKClinicPrivateState,
+  criteriaFromTrial,
+  type CriteriaLike,
+  type HealthAttributesJson,
+  witnesses,
+  ZKClinic,
+  type ZKClinicPrivateState
+} from "zkclinic-contract";
 import { type Config, contractConfig } from "./config.js";
-import { type DeployedZKClinicContract, type ZKClinicCircuits, type ZKClinicProviders } from "./common-types.js";
+import {
+  type DeployedZKClinicContract,
+  type ZKClinicCircuits,
+  type ZKClinicPrivateStateId,
+  type ZKClinicProviders
+} from "./common-types.js";
+
+const PRIVATE_STATE_ID: ZKClinicPrivateStateId = "zkclinicState";
 
 // Needed by indexer graphql subscriptions.
 (globalThis as unknown as { WebSocket: typeof WebSocket }).WebSocket = WebSocket;
@@ -56,11 +80,12 @@ export const getDoctorCoinPublicKeyHex = (walletContext: WalletContext): string 
   throw new Error("Cannot read shielded coin public key from wallet");
 };
 
-const baseContract = CompiledContract.make<ZKClinic.Contract<undefined>>("ZKClinic", ZKClinic.Contract);
-const withVacant = CompiledContract.withVacantWitnesses(baseContract);
-export const zkClinicCompiledContract = CompiledContract.withCompiledFileAssets(
-  withVacant,
-  contractConfig.zkConfigPath
+export const zkClinicCompiledContract = CompiledContract.make<ZKClinic.Contract<ZKClinicPrivateState>>(
+  "ZKClinic",
+  ZKClinic.Contract
+).pipe(
+  CompiledContract.withWitnesses(witnesses),
+  CompiledContract.withCompiledFileAssets(contractConfig.zkConfigPath)
 );
 
 const randomBytes = (length: number): Uint8Array => {
@@ -95,28 +120,35 @@ export const toContractAddressHex = (addr: unknown): string => {
 
 const createWalletAndMidnightProvider = async (
   walletContext: WalletContext
-): Promise<WalletProvider & MidnightProvider> => {
+): Promise<{ walletProvider: WalletProvider; midnightProvider: MidnightProvider }> => {
   await Rx.firstValueFrom(walletContext.wallet.state().pipe(Rx.filter((s) => s.isSynced)));
-  return {
-    getCoinPublicKey(): ledger.CoinPublicKey {
-      return walletContext.shieldedSecretKeys.coinPublicKey;
-    },
-    getEncryptionPublicKey(): ledger.EncPublicKey {
-      return walletContext.shieldedSecretKeys.encryptionPublicKey;
-    },
-    async balanceTx(tx: UnboundTransaction, ttl?: Date): Promise<ledger.FinalizedTransaction> {
-      const txTtl = ttl ?? new Date(Date.now() + 30 * 60 * 1000);
-      const recipe = await walletContext.wallet.balanceUnboundTransaction(
-        tx,
-        { shieldedSecretKeys: walletContext.shieldedSecretKeys, dustSecretKey: walletContext.dustSecretKey },
-        { ttl: txTtl }
+  const { wallet } = walletContext;
+  const protocolVersion = async () => (await Rx.firstValueFrom(wallet.state())).activeProtocolVersion;
+  const walletProvider = createLedger9WalletProvider({
+    getCoinPublicKey: () => walletContext.shieldedSecretKeys.coinPublicKey,
+    getEncryptionPublicKey: () => walletContext.shieldedSecretKeys.encryptionPublicKey,
+    async balanceTx(tx, ttl) {
+      const unbound = WalletTransaction.adopt(
+        "Unbound",
+        WalletLedgerTransaction.deserialize("signature", "proof", "pre-binding", tx.serialize()),
+        await protocolVersion()
       );
-      return walletContext.wallet.finalizeRecipe(recipe);
-    },
-    async submitTx(tx: ledger.FinalizedTransaction): Promise<ledger.TransactionId> {
-      return walletContext.wallet.submitTransaction(tx);
+      const recipe = await wallet.balanceUnboundTransaction(unbound, {
+        ttl: ttl ?? new Date(Date.now() + 30 * 60 * 1000)
+      });
+      return (await wallet.finalizeRecipe(recipe)).serialize();
     }
-  };
+  });
+  const midnightProvider = createLedger9MidnightProvider(async (tx) =>
+    wallet.submitTransaction(
+      WalletTransaction.adopt(
+        "Finalized",
+        WalletLedgerTransaction.deserialize("signature", "proof", "binding", tx.serialize()),
+        await protocolVersion()
+      )
+    )
+  );
+  return { walletProvider, midnightProvider };
 };
 
 export const displayWalletBalances = async (wallet: WalletFacade): Promise<void> => {
@@ -169,28 +201,6 @@ const isHttpOk = async (url: string, timeoutMs: number): Promise<boolean> => {
   }
 };
 
-type SyncProgressLike = {
-  appliedIndex: bigint;
-  highestRelevantWalletIndex: bigint;
-  highestIndex: bigint;
-  isConnected: boolean;
-};
-
-/** Compact per-wallet sync status, e.g. `shielded 120/5000 (connected)`. Defensive: SDK state shapes vary. */
-const describeSyncProgress = (state: unknown): string => {
-  const parts: string[] = [];
-  for (const key of ["shielded", "unshielded", "dust"] as const) {
-    const progress = (state as Record<string, { progress?: SyncProgressLike } | undefined>)[key]?.progress;
-    if (!progress) continue;
-    parts.push(
-      `${key} ${progress.appliedIndex}/${progress.highestRelevantWalletIndex} (head ${progress.highestIndex}, ${
-        progress.isConnected ? "connected" : "DISCONNECTED"
-      })`
-    );
-  }
-  return parts.join(" | ");
-};
-
 const waitForSync = (wallet: WalletFacade) =>
   withTimeout(
     "Wallet sync",
@@ -198,7 +208,7 @@ const waitForSync = (wallet: WalletFacade) =>
     Rx.firstValueFrom(
       wallet.state().pipe(
         Rx.throttleTime(5_000),
-        Rx.tap((state) => log(`Waiting for wallet sync. Synced: ${state.isSynced} ${describeSyncProgress(state)}`)),
+        Rx.tap((state) => log(`Waiting for wallet sync. Synced: ${state.isSynced}`)),
         Rx.filter((state) => state.isSynced)
       )
     )
@@ -232,7 +242,7 @@ const registerNightForDust = async (walletContext: WalletContext): Promise<void>
   const unregisteredNightUtxos =
     state.unshielded?.availableCoins.filter((coin) => coin.meta.registeredForDustGeneration === false) ?? [];
   if (unregisteredNightUtxos.length === 0) {
-    const dustBalance = state.dust?.walletBalance(new Date()) ?? 0n;
+    const dustBalance = state.dust?.balance(new Date()) ?? 0n;
     if (dustBalance > 0n) {
       log("All Night UTXOs already registered for dust.");
       return;
@@ -244,7 +254,7 @@ const registerNightForDust = async (walletContext: WalletContext): Promise<void>
   const recipe = await walletContext.wallet.registerNightUtxosForDustGeneration(
     unregisteredNightUtxos,
     walletContext.unshieldedKeystore.getPublicKey(),
-    (payload) => walletContext.unshieldedKeystore.signData(payload)
+    walletContext.unshieldedKeystore.signDataAsync
   );
   const finalizedTx = await walletContext.wallet.finalizeRecipe(recipe);
   const txId = await walletContext.wallet.submitTransaction(finalizedTx);
@@ -253,55 +263,36 @@ const registerNightForDust = async (walletContext: WalletContext): Promise<void>
   await Rx.firstValueFrom(
     walletContext.wallet.state().pipe(
       Rx.throttleTime(5_000),
-      Rx.tap((s) => log(`Dust balance: ${s.dust?.walletBalance(new Date()) ?? 0n}`)),
-      Rx.filter((s) => (s.dust?.walletBalance(new Date()) ?? 0n) > 0n)
+      Rx.tap((s) => log(`Dust balance: ${s.dust?.balance(new Date()) ?? 0n}`)),
+      Rx.filter((s) => (s.dust?.balance(new Date()) ?? 0n) > 0n)
     )
   );
   log("Dust registration complete!");
 };
 
 const initWalletWithSeed = async (seed: Buffer, config: Config): Promise<WalletContext> => {
-  const hdWallet = HDWallet.fromSeed(seed);
-  if (hdWallet.type !== "seedOk") throw new Error("Failed to initialize wallet seed");
-  const derived = hdWallet.hdWallet.selectAccount(0).selectRoles([Roles.Zswap, Roles.NightExternal, Roles.Dust]).deriveKeysAt(0);
-  if (derived.type !== "keysDerived") throw new Error("Failed to derive keys");
-  hdWallet.hdWallet.clear();
-
-  const shieldedSecretKeys = ledger.ZswapSecretKeys.fromSeed(derived.keys[Roles.Zswap]);
-  const dustSecretKey = ledger.DustSecretKey.fromSeed(derived.keys[Roles.Dust]);
-  const unshieldedKeystore = createKeystore(derived.keys[Roles.NightExternal], config.networkId as never);
+  // Defaults (account 0, index 0, NightExternal/schnorr unshielded role) match the previous HDWallet derivation.
+  const seeds = WalletSeeds.fromMasterSeed(seed);
+  const shieldedSecretKeys = ledger.ZswapSecretKeys.fromSeed(seeds.shielded);
+  const dustSecretKey = ledger.DustSecretKey.fromSeed(seeds.dust);
+  const unshieldedKeystore = createKeystore({ kind: "schnorr", secret: seeds.unshielded }, config.networkId);
   const relayURL = new URL(config.node.replace(/^http/, "ws"));
 
-  const shieldedWallet = ShieldedWallet({
-    networkId: config.networkId,
-    indexerClientConnection: { indexerHttpUrl: config.indexer, indexerWsUrl: config.indexerWS },
-    provingServerUrl: new URL(config.proofServer),
-    relayURL
-  }).startWithSecretKeys(shieldedSecretKeys);
-
-  const unshieldedCfg: Record<string, unknown> = {
-    networkId: config.networkId,
-    indexerClientConnection: { indexerHttpUrl: config.indexer, indexerWsUrl: config.indexerWS },
-    txHistoryStorage: new InMemoryTransactionHistoryStorage()
-  };
-  const unshieldedWallet = UnshieldedWallet(unshieldedCfg as never).startWithPublicKey(
-    UnshieldedPublicKey.fromKeyStore(unshieldedKeystore)
-  );
-
-  const dustConfig: Record<string, unknown> = {
-    networkId: config.networkId,
-    costParameters: { additionalFeeOverhead: 300_000_000_000_000n, feeBlocksMargin: 5 },
-    indexerClientConnection: { indexerHttpUrl: config.indexer, indexerWsUrl: config.indexerWS },
-    provingServerUrl: new URL(config.proofServer),
-    relayURL
-  };
-  const dustWallet = DustWallet(dustConfig as never).startWithSecretKey(
-    dustSecretKey,
-    ledger.LedgerParameters.initialParameters().dust
-  );
-
-  const wallet = new WalletFacade(shieldedWallet, unshieldedWallet, dustWallet);
-  await wallet.start(shieldedSecretKeys, dustSecretKey);
+  // One shared config; the facade builds the proving/submission services from provingServerUrl/relayURL.
+  const wallet = await WalletFacade.init({
+    configuration: {
+      networkId: config.networkId,
+      indexerClientConnection: { indexerHttpUrl: config.indexer, indexerWsUrl: config.indexerWS },
+      provingServerUrl: new URL(config.proofServer),
+      relayURL,
+      txHistoryStorage: new NoOpTransactionHistoryStorage(),
+      costParameters: { additionalFeeOverhead: 300_000_000_000_000n, feeBlocksMargin: 5 }
+    },
+    shielded: (cfg) => ShieldedWallet(cfg).startWithSeed(seeds.shielded),
+    unshielded: (cfg) => UnshieldedWallet(cfg).startWithPublicKey(UnshieldedPublicKey.fromKeyStore(unshieldedKeystore)),
+    dust: (cfg) => DustWallet(cfg).startWithSeed(seeds.dust)
+  });
+  await wallet.start(seeds);
   return { wallet, shieldedSecretKeys, dustSecretKey, unshieldedKeystore };
 };
 
@@ -361,20 +352,22 @@ export const faucetHint = (walletContext: WalletContext): string =>
   walletContext.unshieldedKeystore.getBech32Address().asString();
 
 export const configureProviders = async (walletContext: WalletContext, config: Config): Promise<ZKClinicProviders> => {
-  const walletAndMidnightProvider = await createWalletAndMidnightProvider(walletContext);
+  const { walletProvider, midnightProvider } = await createWalletAndMidnightProvider(walletContext);
   const storagePassword = process.env.MIDNIGHT_STORAGE_PASSWORD ?? "zkclinic-default-password";
   const zkConfigProvider = new NodeZkConfigProvider<ZKClinicCircuits>(contractConfig.zkConfigPath);
 
   return {
     privateStateProvider: levelPrivateStateProvider({
       privateStateStoreName: contractConfig.privateStateStoreName,
-      privateStoragePasswordProvider: () => storagePassword
+      privateStoragePasswordProvider: () => storagePassword,
+      accountId: walletContext.unshieldedKeystore.getBech32Address().asString()
     }),
     publicDataProvider: indexerPublicDataProvider(config.indexer, config.indexerWS),
     zkConfigProvider,
     proofProvider: httpClientProofProvider(config.proofServer, zkConfigProvider),
-    walletProvider: walletAndMidnightProvider,
-    midnightProvider: walletAndMidnightProvider
+    walletProvider,
+    midnightProvider,
+    config: { networkId: config.networkId, ttlSeconds: 30 * 60 }
   };
 };
 
@@ -408,7 +401,11 @@ export const deploy = async (providers: ZKClinicProviders, config: Config): Prom
   const contract = await withTimeout(
     "Contract deployment",
     DEPLOY_TIMEOUT_MS,
-    deployContract(providers as any, { compiledContract: zkClinicCompiledContract } as any)
+    deployContract(providers as any, {
+      compiledContract: zkClinicCompiledContract,
+      privateStateId: PRIVATE_STATE_ID,
+      initialPrivateState: createZKClinicPrivateState(randomBytes(32))
+    } as any)
   );
   log(`Deploy completed in ${Math.round((Date.now() - startedAt) / 1000)}s.`);
   return contract as never;
@@ -417,13 +414,17 @@ export const deploy = async (providers: ZKClinicProviders, config: Config): Prom
 export const join = async (providers: ZKClinicProviders, contractAddress: string): Promise<DeployedZKClinicContract> => {
   assertIsContractAddress(contractAddress);
   log("Joining deployed contract...");
+  // Private state is scoped per contract address; keep an existing one so the patient's ZK key is stable across runs.
+  const existing = await providers.privateStateProvider.forContract(contractAddress).get(PRIVATE_STATE_ID);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const contract = await withTimeout(
     "Join deployed contract",
     JOIN_TIMEOUT_MS,
     findDeployedContract(providers as any, {
       compiledContract: zkClinicCompiledContract,
-      contractAddress
+      contractAddress,
+      privateStateId: PRIVATE_STATE_ID,
+      ...(existing ? {} : { initialPrivateState: createZKClinicPrivateState(randomBytes(32)) })
     } as any)
   );
   return contract as never;
@@ -448,7 +449,7 @@ export const getPendingLicenseHash = async (
 ): Promise<Map<string, string>> => {
   const state = await providers.publicDataProvider.queryContractState(contractAddress as never);
   if (!state) return new Map();
-  const ledgerState = ZKClinic.ledger(state.data);
+  const ledgerState = ZKClinic.ledger(state.contractState.deserialize({ v9: ContractState }).data);
   const map = new Map<string, string>();
   for (const [doctor, hash] of ledgerState.pendingIssuers) {
     const key = Buffer.from(doctor.bytes).toString("hex").toLowerCase();
@@ -567,15 +568,75 @@ export const closeTrialOnChain = async (
   await contract.callTx.closeTrial(id);
 };
 
+/** Enroll a pseudonym (nullifier = proof ID) that already proved eligibility for this trial. */
 export const recordEnrollmentOnChain = async (
   contract: DeployedZKClinicContract,
-  trialIdHex: string
+  trialIdHex: string,
+  nullifierHex: string
 ): Promise<void> => {
   const id = parseBytes32Hex(trialIdHex.replace(/^0x/, "").toLowerCase());
-  await contract.callTx.recordEnrollment(id);
+  await contract.callTx.recordEnrollment(id, parseBytes32Hex(nullifierHex.replace(/^0x/, "").toLowerCase()));
 };
 
 const bytesToHex = (bytes: Uint8Array): string => Buffer.from(bytes).toString("hex").toLowerCase();
+
+const privateStatesOf = (providers: ZKClinicProviders, contract: DeployedZKClinicContract) =>
+  providers.privateStateProvider.forContract(contract.deployTxData.public.contractAddress);
+
+const requirePrivateState = async (
+  providers: ZKClinicProviders,
+  contract: DeployedZKClinicContract
+): Promise<ZKClinicPrivateState> => {
+  const ps = await privateStatesOf(providers, contract).get(PRIVATE_STATE_ID);
+  if (!ps) throw new Error("No private state for this contract. Deploy or join a contract first.");
+  return ps;
+};
+
+/** Public half of this wallet's ZK secret; the patient hands this to the doctor. */
+export const getZkPublicKeyHex = async (
+  providers: ZKClinicProviders,
+  contract: DeployedZKClinicContract
+): Promise<string> =>
+  bytesToHex(ZKClinic.pureCircuits.patientPublicKey((await requirePrivateState(providers, contract)).secretKey));
+
+/** Doctor attests a credential: only the commitment goes on-chain. Returns the commitment hex. */
+export const issueCredentialCommitmentOnChain = async (
+  contract: DeployedZKClinicContract,
+  patientZkPublicKeyHex: string,
+  attributes: ZKClinic.HealthAttributes
+): Promise<string> => {
+  const ownerPk = parseBytes32Hex(patientZkPublicKeyHex.replace(/^0x/, "").toLowerCase());
+  const commitment = ZKClinic.pureCircuits.credentialCommitment(ownerPk, attributes);
+  await contract.callTx.issueCredentialCommitment(commitment);
+  return bytesToHex(commitment);
+};
+
+export const publishTrialCriteriaOnChain = async (
+  contract: DeployedZKClinicContract,
+  trialIdHex: string,
+  criteria: CriteriaLike
+): Promise<void> => {
+  const id = parseBytes32Hex(trialIdHex.replace(/^0x/, "").toLowerCase());
+  await contract.callTx.publishTrialCriteria(id, criteriaFromTrial(criteria));
+};
+
+/**
+ * Patient proves eligibility. Attributes go into local private state only; the transaction carries
+ * a ZK proof and the returned nullifier (per-trial pseudonym = proof ID).
+ */
+export const proveEligibilityOnChain = async (
+  providers: ZKClinicProviders,
+  contract: DeployedZKClinicContract,
+  trialIdHex: string,
+  attributesJson: HealthAttributesJson
+): Promise<string> => {
+  const ps = await requirePrivateState(providers, contract);
+  await privateStatesOf(providers, contract).set(PRIVATE_STATE_ID, { ...ps, attributes: attributesFromJson(attributesJson) });
+  const id = parseBytes32Hex(trialIdHex.replace(/^0x/, "").toLowerCase());
+  // asOf must not be in the past at block time; 10 min of slack covers proving + submission.
+  const tx = await contract.callTx.proveEligibility(id, BigInt(Math.floor(Date.now() / 1000) + 600));
+  return bytesToHex(tx.private.result);
+};
 
 const ISSUER_STATUS_LABELS = ["None", "Pending", "Approved", "Revoked"] as const;
 const TRIAL_STATUS_LABELS = ["Open", "Closed", "Full"] as const;
@@ -584,6 +645,9 @@ function issuerStatusLabel(n: bigint | number): string {
   const i = Number(n);
   return ISSUER_STATUS_LABELS[i] ?? `Unknown(${i})`;
 }
+
+/** Inverse of `codeBytes`: zero-padded UTF-8 back to text ("-" when the rule is unset). */
+export const codeText = (b: Uint8Array): string => Buffer.from(b).toString("utf8").replace(/\0+$/, "") || "-";
 
 function trialStatusLabel(n: bigint | number): string {
   const i = Number(n);
@@ -612,7 +676,7 @@ export const displayContractState = async (providers: ZKClinicProviders, contrac
     return;
   }
 
-  const ledgerState = ZKClinic.ledger(state.data);
+  const ledgerState = ZKClinic.ledger(state.contractState.deserialize({ v9: ContractState }).data);
   const cap = parseListCap();
   const full = isFullStateDump();
 
@@ -623,6 +687,7 @@ export const displayContractState = async (providers: ZKClinicProviders, contrac
   const diagIdxN = Number(ledgerState.credentialDiagnosisNextIndex.size());
   const diagSlotN = Number(ledgerState.diagnosisCommitmentBySlot.size());
   const trialsN = Number(ledgerState.trials.size());
+  const proofsN = Number(ledgerState.eligibilityProofs.size());
 
   console.log("");
   console.log("═══════════════════════════════════════════════════════════════════");
@@ -637,6 +702,9 @@ export const displayContractState = async (providers: ZKClinicProviders, contrac
   );
   console.log(
     `  Trials: ${trialsN}  ·  Cards w/ diagnosis index: ${diagIdxN}  ·  Diagnosis commitment rows: ${diagSlotN}`
+  );
+  console.log(
+    `  ZK credential commitments: ${ledgerState.credentialCommitmentCount.toString()}  ·  Eligibility proofs: ${proofsN}  ·  Enrolled pseudonyms: ${ledgerState.enrolledProofs.size().toString()}`
   );
   if (!full && (issuedN > cap || diagIdxN > cap || diagSlotN > cap)) {
     console.log(
@@ -746,6 +814,28 @@ export const displayContractState = async (providers: ZKClinicProviders, contrac
         `  [${st}] ${bytesToHex(tid)}  mgr ${bytesToHex(tr.manager.bytes)}  slots ${tr.slotsFilled.toString()}/${tr.slotsTotal.toString()}  min match ≥${minMatch}%  deadline(ms)=${tr.deadline.toString()}`
       );
       console.log(`         criteria ${bytesToHex(tr.criteriaHash)}`);
+      if (ledgerState.trialCriteria.member(tid)) {
+        const c = ledgerState.trialCriteria.lookup(tid);
+        const eligible = ledgerState.trialEligibleCount.member(tid) ? ledgerState.trialEligibleCount.lookup(tid) : 0n;
+        console.log(
+          `         on-chain criteria: age ${c.minAge}-${c.maxAge}  requires ${codeText(c.requiredDiagnosis)}  excludes ${codeText(c.excludedDiagnosis)}  lab ${codeText(c.labCode)} in [${c.labMin}, ${c.labMax}] (x100)  ·  proven eligible: ${eligible}`
+        );
+      }
+      i++;
+    }
+    console.log("");
+  }
+
+  if (proofsN > 0) {
+    console.log("── Eligibility proofs (pseudonym → trial) ──");
+    let i = 0;
+    for (const [nul, tid] of ledgerState.eligibilityProofs) {
+      if (!full && i >= cap) {
+        console.log(`  … ${proofsN - cap} more`);
+        break;
+      }
+      const enrolled = ledgerState.enrolledProofs.member(nul) ? "  [enrolled]" : "";
+      console.log(`  ${bytesToHex(nul)}  →  ${bytesToHex(tid)}${enrolled}`);
       i++;
     }
     console.log("");

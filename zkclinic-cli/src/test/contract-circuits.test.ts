@@ -15,6 +15,9 @@ const EXPECTED_PUBLIC_CIRCUITS = [
   "revokeCredential",
   "createTrial",
   "closeTrial",
+  "issueCredentialCommitment",
+  "publishTrialCriteria",
+  "proveEligibility",
   "recordEnrollment"
 ] as const;
 

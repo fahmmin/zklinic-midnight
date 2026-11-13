@@ -2,6 +2,7 @@ import React, {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -9,14 +10,16 @@ import React, {
 } from "react";
 import type { PatientIntakeV1 } from "../credential";
 import { Buffer } from "buffer";
-import { type ContractAddress } from "@midnight-ntwrk/compact-runtime";
-import * as ledger from "@midnight-ntwrk/ledger-v7";
+import { type ContractAddress, ContractState } from "@midnight-ntwrk/compact-runtime";
+import * as ledger from "@midnight-ntwrk/midnight-js-protocol/v9";
 import { CompiledContract } from "@midnight-ntwrk/compact-js";
-import { findDeployedContract, submitCallTx } from "@midnight-ntwrk/midnight-js-contracts";
+import { deployContract, findDeployedContract, submitCallTx } from "@midnight-ntwrk/midnight-js-contracts";
 import { FetchZkConfigProvider } from "@midnight-ntwrk/midnight-js-fetch-zk-config-provider";
-import { httpClientProofProvider } from "@midnight-ntwrk/midnight-js-http-client-proof-provider";
+import {
+  dappConnectorProofProvider,
+  dappConnectorWalletProviders
+} from "@midnight-ntwrk/midnight-js-dapp-connector-proof-provider";
 import { indexerPublicDataProvider } from "@midnight-ntwrk/midnight-js-indexer-public-data-provider";
-import { setNetworkId, type NetworkId } from "@midnight-ntwrk/midnight-js-network-id";
 import { assertIsContractAddress, parseCoinPublicKeyToHex } from "@midnight-ntwrk/midnight-js-utils";
 import {
   catchError,
@@ -39,11 +42,19 @@ import type {
   LogLevel,
   LoggerProvider,
   MidnightProvider,
+  NetworkId,
   PrivateStateProvider,
-  UnboundTransaction,
+  ProofProvider,
+  PublicDataProvider,
   WalletProvider
 } from "@midnight-ntwrk/midnight-js-types";
-import { ZKClinic } from "zkclinic-contract";
+import {
+  createZKClinicPrivateState,
+  witnesses,
+  ZKClinic,
+  type ZKClinicPrivateState
+} from "zkclinic-contract";
+import { toHex, zkSecretKey } from "../lib/zkIdentity";
 import { upsertStoredCredential } from "../credentialStorage";
 
 const NETWORK_ID = import.meta.env.VITE_NETWORK_ID || "preview";
@@ -91,6 +102,23 @@ function normalizeContractAddressHex(input: string): string {
  * Midnight dApp connector v4: wallets live on `window.midnight` (e.g. `mnLace`, `1am`, UUID keys).
  * Prefer Lace, then 1AM, then any other injector that exposes `connect`.
  */
+/**
+ * 1AM answers "Request failed" / "No response from wallet background script" while its service worker is waking
+ * up (typically right after a page load). Retrying after a short pause succeeds, so the user never sees it.
+ */
+async function connectWithRetry(api: InitialAPI): Promise<ConnectedAPI> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await api.connect(NETWORK_ID);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      const transient = /request failed|no response from wallet|forwarding/i.test(msg);
+      if (!transient || attempt >= 4) throw e;
+      await new Promise((r) => setTimeout(r, 1500 * attempt));
+    }
+  }
+}
+
 function listMidnightWalletApis(): InitialAPI[] {
   const midnight = (window as unknown as { midnight?: Record<string, unknown> }).midnight;
   if (!midnight) return [];
@@ -102,8 +130,8 @@ function listMidnightWalletApis(): InitialAPI[] {
     seen.add(w);
     ordered.push(w as InitialAPI);
   };
-  add(midnight.mnLace);
   add(midnight["1am"]);
+  add(midnight.mnLace);
   for (const v of Object.values(midnight)) add(v);
   return ordered;
 }
@@ -145,64 +173,77 @@ function shieldedCoinPublicKeyToDoctorKeyHex(pk: unknown, zswapNetworkId: Networ
 function inMemoryPrivateStateProvider<PSI extends string, PS>(): PrivateStateProvider<PSI, PS> {
   const states = new Map<string, PS>();
   const signingKeys = new Map<string, unknown>();
-  let contractAddress: string | null = null;
-
-  const scopedKey = (key: PSI): string => (contractAddress ? `${contractAddress}:${key}` : key);
+  const norm = (a: ContractAddress): string => String(a).replace(/^0x/i, "").toLowerCase();
+  const unsupported = async (): Promise<never> => {
+    throw new Error("Export/import is not supported by the in-memory provider");
+  };
 
   return {
-    setContractAddress(address: ContractAddress): void {
-      contractAddress =
-        typeof address === "string"
-          ? address.replace(/^0x/i, "").toLowerCase()
-          : uint8ArrayToHex(address as unknown as Uint8Array);
+    forContract(contractAddress: ContractAddress) {
+      const k = (id: PSI) => `${norm(contractAddress)}:${id}`;
+      return {
+        contractAddress,
+        async set(id: PSI, value: PS) {
+          states.set(k(id), value);
+        },
+        async get(id: PSI) {
+          return states.get(k(id)) ?? null;
+        },
+        async remove(id: PSI) {
+          states.delete(k(id));
+        },
+        async clear() {
+          for (const key of [...states.keys()]) if (key.startsWith(`${norm(contractAddress)}:`)) states.delete(key);
+        },
+        exportPrivateStates: unsupported,
+        importPrivateStates: unsupported
+      };
     },
-    async get(key: PSI): Promise<PS | null> {
-      return states.get(scopedKey(key)) ?? null;
-    },
-    async set(key: PSI, value: PS): Promise<void> {
-      states.set(scopedKey(key), value);
-    },
-    async remove(key: PSI): Promise<void> {
-      states.delete(scopedKey(key));
-    },
-    async clear(): Promise<void> {
+    async clearAll() {
       states.clear();
     },
-    async setSigningKey(address: ContractAddress, signingKey: unknown): Promise<void> {
-      const k =
-        typeof address === "string"
-          ? address.replace(/^0x/i, "").toLowerCase()
-          : uint8ArrayToHex(address as unknown as Uint8Array);
-      signingKeys.set(k, signingKey);
+    async setSigningKey(address: ContractAddress, signingKey: unknown) {
+      signingKeys.set(norm(address), signingKey);
     },
-    async getSigningKey(address: ContractAddress): Promise<unknown | null> {
-      const k =
-        typeof address === "string"
-          ? address.replace(/^0x/i, "").toLowerCase()
-          : uint8ArrayToHex(address as unknown as Uint8Array);
-      return signingKeys.get(k) ?? null;
+    async getSigningKey(address: ContractAddress) {
+      return signingKeys.get(norm(address)) ?? null;
     },
-    async removeSigningKey(address: ContractAddress): Promise<void> {
-      const k =
-        typeof address === "string"
-          ? address.replace(/^0x/i, "").toLowerCase()
-          : uint8ArrayToHex(address as unknown as Uint8Array);
-      signingKeys.delete(k);
+    async removeSigningKey(address: ContractAddress) {
+      signingKeys.delete(norm(address));
     },
-    async clearSigningKeys(): Promise<void> {
+    async clearSigningKeys() {
       signingKeys.clear();
     },
-    async exportPrivateStates() {
-      throw new Error("Export not supported in in-memory provider");
-    },
-    async importPrivateStates() {
-      throw new Error("Import not supported in in-memory provider");
-    }
-  } as PrivateStateProvider<PSI, PS>;
+    exportSigningKeys: unsupported,
+    importSigningKeys: unsupported
+  } as unknown as PrivateStateProvider<PSI, PS>;
 }
 
-const baseContract = CompiledContract.make<ZKClinic.Contract<undefined>>("ZKClinic", ZKClinic.Contract);
-const withVacant = CompiledContract.withVacantWitnesses(baseContract);
+const PRIVATE_STATE_ID = "zkclinicState";
+const baseContract = CompiledContract.make<ZKClinic.Contract<ZKClinicPrivateState>>("ZKClinic", ZKClinic.Contract);
+const withWitnesses = CompiledContract.withWitnesses(baseContract, witnesses as never);
+
+/**
+ * Dev server only: `localStorage["zkclinic-ui-preview"] = "1"` renders the app as a signed-in wallet on an empty
+ * contract (`"doctor"`: an approved doctor), so layouts can be worked on and recorded without a wallet. Calls still fail.
+ */
+const UI_PREVIEW_MODE = import.meta.env.DEV ? localStorage.getItem("zkclinic-ui-preview") : null;
+const UI_PREVIEW = UI_PREVIEW_MODE === "1" || UI_PREVIEW_MODE === "doctor";
+const PREVIEW_KEY = "ab".repeat(32);
+const PREVIEW_STATE = {
+  admin: PREVIEW_KEY,
+  pending: [],
+  issuers:
+    UI_PREVIEW_MODE === "doctor"
+      ? [{ doctor: PREVIEW_KEY, hash: "", attestationHash: "", issuerVerificationHash: "", status: 2 }]
+      : [],
+  revokedCredentialIds: [],
+  trials: [],
+  credentialCommitmentCount: 0n,
+  trialsWithCriteria: [],
+  eligibilityProofs: {},
+  enrolledProofs: []
+};
 
 export type DeploymentStatus = "idle" | "in-progress" | "deployed" | "failed";
 
@@ -231,6 +272,13 @@ export type ZKClinicState = {
   }>;
   revokedCredentialIds: string[];
   trials: TrialLedgerEntry[];
+  /** Wave 3 private eligibility. All hex. */
+  credentialCommitmentCount: bigint;
+  /** Trial ids that have machine-checkable criteria on-chain. */
+  trialsWithCriteria: string[];
+  /** ZK-proven pseudonym (nullifier) -> trial id. */
+  eligibilityProofs: Record<string, string>;
+  enrolledProofs: string[];
 };
 
 export interface ZKClinicContextValue {
@@ -253,6 +301,8 @@ export interface ZKClinicContextValue {
   connect: () => Promise<void>;
   /** Join an existing contract by address (same model as example-zkloan UI — deploy via CLI). */
   join: (address: string) => Promise<void>;
+  /** Deploy a fresh ZKLinic contract from the connected wallet; returns its address. You become admin. */
+  deploy: () => Promise<string>;
   /** Returns whether indexer state was decoded successfully (false = see `stateRefreshError`). */
   refreshState: () => Promise<boolean>;
   submitRequest: (licenseHashHex: string) => Promise<void>;
@@ -301,7 +351,14 @@ export interface ZKClinicContextValue {
     eligibilityThresholdBps?: bigint
   ) => Promise<void>;
   closeTrial: (trialIdHex: string) => Promise<void>;
-  recordEnrollment: (trialIdHex: string) => Promise<void>;
+  /** Enroll a pseudonym; the contract rejects it unless that pseudonym proved eligibility for this trial. */
+  recordEnrollment: (trialIdHex: string, nullifierHex: string) => Promise<void>;
+  /** Doctor: add a credential commitment to the on-chain anonymity set. */
+  issueCredentialCommitment: (commitmentHex: string) => Promise<void>;
+  /** Manager: publish the criteria the ZK circuit enforces (once per trial). */
+  publishTrialCriteria: (trialIdHex: string, criteria: ZKClinic.EligibilityCriteria) => Promise<void>;
+  /** Patient: prove eligibility in zero knowledge. Returns the per-trial pseudonym (nullifier hex). */
+  proveEligibility: (trialIdHex: string, attributes: ZKClinic.HealthAttributes) => Promise<string>;
 }
 
 const ZKClinicContext = createContext<ZKClinicContextValue | undefined>(undefined);
@@ -327,25 +384,25 @@ type WalletConnectResult = {
 
 export function ZKClinicProvider({ children }: PropsWithChildren): React.ReactElement {
   const browserPrivateStateProvider = useMemo(
-    () => inMemoryPrivateStateProvider<string, undefined>(),
+    () => inMemoryPrivateStateProvider<string, ZKClinicPrivateState>(),
     []
   );
 
-  const [status, setStatus] = useState<DeploymentStatus>("idle");
+  const [status, setStatus] = useState<DeploymentStatus>(UI_PREVIEW ? "deployed" : "idle");
   const [contractAddress, setContractAddress] = useState<string | null>(null);
   const [error, setError] = useState<Error | null>(null);
   const [stateRefreshError, setStateRefreshError] = useState<string | null>(null);
-  const [state, setState] = useState<ZKClinicState | null>(null);
-  const [walletAddress, setWalletAddress] = useState<string | null>(null);
+  const [state, setState] = useState<ZKClinicState | null>(UI_PREVIEW ? PREVIEW_STATE : null);
+  const [walletAddress, setWalletAddress] = useState<string | null>(UI_PREVIEW ? "mn_addr_preprod1preview" : null);
   const [walletConnectorName, setWalletConnectorName] = useState<string | null>(null);
-  const [walletDoctorKeyHex, setWalletDoctorKeyHex] = useState<string | null>(null);
+  const [walletDoctorKeyHex, setWalletDoctorKeyHex] = useState<string | null>(UI_PREVIEW ? PREVIEW_KEY : null);
   const [flowMessage, setFlowMessage] = useState<string | null>(null);
   const [walletNetworkId, setWalletNetworkId] = useState<string | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
 
   const providersRef = useRef<{
-    publicDataProvider: Awaited<ReturnType<typeof indexerPublicDataProvider>>;
-    proofProvider: Awaited<ReturnType<typeof httpClientProofProvider>>;
+    publicDataProvider: PublicDataProvider;
+    proofProvider: ProofProvider;
     walletProvider: WalletProvider;
     midnightProvider: MidnightProvider;
     zkConfigProvider: unknown;
@@ -381,12 +438,11 @@ export function ZKClinicProvider({ children }: PropsWithChildren): React.ReactEl
         concatMap(async (initialAPI) => {
           const walletName = initialAPI.name;
           try {
-            const connectedAPI = await initialAPI.connect(NETWORK_ID);
+            const connectedAPI = await connectWithRetry(initialAPI);
             const config = await connectedAPI.getConfiguration();
             const connStatus = await connectedAPI.getConnectionStatus();
             const networkId =
               connStatus.status === "connected" ? connStatus.networkId : config.networkId;
-            setNetworkId(networkId);
             return { wallet: connectedAPI, config, networkId, walletName };
           } catch (e) {
             const errorMessage = e instanceof Error ? e.message : String(e);
@@ -451,59 +507,17 @@ export function ZKClinicProvider({ children }: PropsWithChildren): React.ReactEl
     if (!addresses.shieldedCoinPublicKey || !addresses.shieldedEncryptionPublicKey) {
       throw new Error("Wallet did not provide shieldedCoinPublicKey or shieldedEncryptionPublicKey");
     }
-    if (!config.proverServerUri) {
-      throw new Error(
-        "Proof server URI not available from wallet configuration. Set the proof server in your wallet for this network or update the extension."
-      );
-    }
-
-    const zkConfigProvider = new FetchZkConfigProvider(zkConfigPath, fetch.bind(window));
-    const proofProvider = httpClientProofProvider(config.proverServerUri, zkConfigProvider);
-    const publicDataProvider = indexerPublicDataProvider(config.indexerUri, config.indexerWsUri);
-
-    const walletProvider: WalletProvider = {
-      getCoinPublicKey(): ledger.CoinPublicKey {
-        return addresses.shieldedCoinPublicKey as ledger.CoinPublicKey;
-      },
-      getEncryptionPublicKey(): ledger.EncPublicKey {
-        return addresses.shieldedEncryptionPublicKey as ledger.EncPublicKey;
-      },
-      async balanceTx(tx: UnboundTransaction): Promise<ledger.FinalizedTransaction> {
-        try {
-          setFlowMessage("Signing with your wallet…");
-          const serialized = tx.serialize();
-          const hex = uint8ArrayToHex(serialized);
-          const result = await (
-            wallet as unknown as {
-              balanceUnsealedTransaction: (h: string, o: object) => Promise<{ tx: string }>;
-            }
-          ).balanceUnsealedTransaction(hex, {});
-          return ledger.Transaction.deserialize(
-            "signature",
-            "proof",
-            "binding",
-            hexToUint8Array(result.tx)
-          ) as ledger.FinalizedTransaction;
-        } catch (e) {
-          throw e;
-        } finally {
-          setFlowMessage(null);
-        }
-      }
-    };
-
-    const midnightProvider: MidnightProvider = {
-      async submitTx(tx: ledger.FinalizedTransaction) {
-        try {
-          setFlowMessage("Submitting...");
-          const hex = uint8ArrayToHex(tx.serialize());
-          await wallet.submitTransaction(hex);
-          return tx.identifiers()[0];
-        } finally {
-          setFlowMessage(null);
-        }
-      }
-    };
+    // A detached window.fetch throws "Illegal invocation" when the provider calls it as a method.
+    const zkConfigProvider = new FetchZkConfigProvider(zkConfigPath, { fetchFunc: fetch.bind(window) });
+    // The wallet proves (1AM proves in the extension), balances, pays and submits.
+    const proofProvider = await dappConnectorProofProvider(wallet, zkConfigProvider, ledger.CostModel.initialCostModel());
+    const { walletProvider, midnightProvider } = await dappConnectorWalletProviders(wallet);
+    // The default WebSocket impl (isomorphic-ws) is undefined in browsers, which breaks tx-inclusion subscriptions.
+    const publicDataProvider = indexerPublicDataProvider(
+      config.indexerUri,
+      config.indexerWsUri,
+      WebSocket as unknown as NonNullable<Parameters<typeof indexerPublicDataProvider>[2]>
+    );
 
     const providers = {
       publicDataProvider,
@@ -512,7 +526,8 @@ export function ZKClinicProvider({ children }: PropsWithChildren): React.ReactEl
       midnightProvider,
       zkConfigProvider,
       privateStateProvider: browserPrivateStateProvider,
-      loggerProvider: noopLoggerProvider
+      loggerProvider: noopLoggerProvider,
+      config: { networkId: walletReportedNetworkId, ttlSeconds: 600 }
     };
     providersRef.current = providers;
     return {
@@ -526,7 +541,7 @@ export function ZKClinicProvider({ children }: PropsWithChildren): React.ReactEl
   }, [connectToWallet, zkConfigPath, browserPrivateStateProvider]);
 
   const compiledContract = useMemo(() => {
-    return CompiledContract.withCompiledFileAssets(withVacant, zkConfigPath);
+    return CompiledContract.withCompiledFileAssets(withWitnesses, zkConfigPath);
   }, [zkConfigPath]);
 
   const refreshState = useCallback(async (): Promise<boolean> => {
@@ -540,7 +555,7 @@ export function ZKClinicProvider({ children }: PropsWithChildren): React.ReactEl
         setStateRefreshError(null);
         return true;
       }
-      const ledgerState = ZKClinic.ledger(stateData.data);
+      const ledgerState = ZKClinic.ledger(stateData.contractState.deserialize({ v9: ContractState }).data);
       const pending: ZKClinicState["pending"] = [];
       for (const [doctor, hash] of ledgerState.pendingIssuers) {
         pending.push({
@@ -575,12 +590,19 @@ export function ZKClinicProvider({ children }: PropsWithChildren): React.ReactEl
           eligibilityThresholdBps: tr.eligibilityThresholdBps
         });
       }
+      const hex = (b: Uint8Array) => Buffer.from(b).toString("hex").toLowerCase();
+      const eligibilityProofs: Record<string, string> = {};
+      for (const [nullifier, trialId] of ledgerState.eligibilityProofs) eligibilityProofs[hex(nullifier)] = hex(trialId);
       setState({
         admin: Buffer.from(ledgerState.admin.bytes).toString("hex").toLowerCase(),
         pending,
         issuers,
         revokedCredentialIds,
-        trials
+        trials,
+        credentialCommitmentCount: ledgerState.credentialCommitmentCount,
+        trialsWithCriteria: Array.from(ledgerState.trialCriteria, ([trialId]) => hex(trialId)),
+        eligibilityProofs,
+        enrolledProofs: Array.from(ledgerState.enrolledProofs, hex)
       });
       setStateRefreshError(null);
       return true;
@@ -591,6 +613,15 @@ export function ZKClinicProvider({ children }: PropsWithChildren): React.ReactEl
       return false;
     }
   }, [contractAddressRef, providersRef]);
+
+  // Keep every screen current without a Refresh button: other people's proofs, requests and approvals show up on their own.
+  useEffect(() => {
+    if (status !== "deployed") return;
+    const id = window.setInterval(() => {
+      if (document.visibilityState === "visible") void refreshState();
+    }, 15_000);
+    return () => window.clearInterval(id);
+  }, [status, refreshState]);
 
   const join = useCallback(
     async (address: string) => {
@@ -629,10 +660,46 @@ export function ZKClinicProvider({ children }: PropsWithChildren): React.ReactEl
         setError(e instanceof Error ? e : new Error(String(e)));
         setStatus("failed");
         setFlowMessage(null);
+        throw e;
       }
     },
     [initProviders, compiledContract, refreshState]
   );
+
+  const deploy = useCallback(async (): Promise<string> => {
+    setError(null);
+    setStatus("in-progress");
+    try {
+      const { providers, walletSnapshot } = await initProviders();
+      setWalletAddress(walletSnapshot.addresses.shieldedAddress ?? null);
+      setWalletNetworkId(walletSnapshot.networkId);
+      setWalletDoctorKeyHex(
+        shieldedCoinPublicKeyToDoctorKeyHex(
+          walletSnapshot.addresses.shieldedCoinPublicKey,
+          walletSnapshot.networkId as NetworkId
+        )
+      );
+      setFlowMessage("Deploying the contract (this can take a minute)…");
+      const deployed = await deployContract(providers as never, {
+        compiledContract,
+        privateStateId: PRIVATE_STATE_ID,
+        initialPrivateState: createZKClinicPrivateState(zkSecretKey())
+      } as never);
+      const addr = (deployed as { deployTxData: { public: { contractAddress: string } } }).deployTxData.public
+        .contractAddress;
+      contractAddressRef.current = addr as ContractAddress;
+      setContractAddress(addr);
+      setStatus("deployed");
+      await refreshState();
+      return addr;
+    } catch (e) {
+      setError(e instanceof Error ? e : new Error(String(e)));
+      setStatus("failed");
+      throw e;
+    } finally {
+      setFlowMessage(null);
+    }
+  }, [initProviders, compiledContract, refreshState]);
 
   const submitRequest = useCallback(
     async (licenseHashHex: string) => {
@@ -984,22 +1051,87 @@ export function ZKClinicProvider({ children }: PropsWithChildren): React.ReactEl
     [providersRef, contractAddressRef, compiledContract, refreshState]
   );
 
-  const recordEnrollment = useCallback(
-    async (trialIdHex: string) => {
+  /** Shared path for the wave 3 circuits: run, clear the banner even on failure, refresh. */
+  const callCircuit = useCallback(
+    async (circuitId: string, args: unknown[], message: string, privateStateId?: string) => {
       if (!providersRef.current || !contractAddressRef.current) throw new Error("No contract");
-      const id = hexToUint8Array(trialIdHex.replace(/^0x/, "").toLowerCase());
-      if (id.length !== 32) throw new Error("Trial id must be 64 hex chars");
-      setFlowMessage("Recording enrollment...");
-      await submitCallTx(providersRef.current as never, {
-        compiledContract,
-        contractAddress: contractAddressRef.current,
-        circuitId: "recordEnrollment" as never,
-        args: [id] as never
-      } as never);
-      setFlowMessage(null);
+      setFlowMessage(message);
+      try {
+        await submitCallTx(providersRef.current as never, {
+          compiledContract,
+          contractAddress: contractAddressRef.current,
+          circuitId: circuitId as never,
+          args: args as never,
+          ...(privateStateId ? { privateStateId } : {})
+        } as never);
+      } finally {
+        setFlowMessage(null);
+      }
       await refreshState();
     },
     [providersRef, contractAddressRef, compiledContract, refreshState]
+  );
+
+  const bytes32 = (hexValue: string, what: string): Uint8Array => {
+    const b = hexToUint8Array(hexValue.replace(/^0x/, "").toLowerCase());
+    if (b.length !== 32) throw new Error(`${what} must be 64 hex chars`);
+    return b;
+  };
+
+  const recordEnrollment = useCallback(
+    (trialIdHex: string, nullifierHex: string) =>
+      callCircuit(
+        "recordEnrollment",
+        [bytes32(trialIdHex, "Trial id"), bytes32(nullifierHex, "Proof pseudonym")],
+        "Recording enrollment..."
+      ),
+    [callCircuit]
+  );
+
+  const issueCredentialCommitment = useCallback(
+    (commitmentHex: string) =>
+      callCircuit(
+        "issueCredentialCommitment",
+        [bytes32(commitmentHex, "Commitment")],
+        "Attesting credential commitment on-chain..."
+      ),
+    [callCircuit]
+  );
+
+  const publishTrialCriteria = useCallback(
+    (trialIdHex: string, criteria: ZKClinic.EligibilityCriteria) =>
+      callCircuit(
+        "publishTrialCriteria",
+        [bytes32(trialIdHex, "Trial id"), criteria],
+        "Publishing ZK-checkable criteria on-chain..."
+      ),
+    [callCircuit]
+  );
+
+  const proveEligibility = useCallback(
+    async (trialIdHex: string, attributes: ZKClinic.HealthAttributes): Promise<string> => {
+      if (!providersRef.current || !contractAddressRef.current) throw new Error("No contract");
+      const trialId = bytes32(trialIdHex, "Trial id");
+      const secretKey = zkSecretKey();
+      // The witnesses read the secret key + attributes from private state; nothing here is sent anywhere.
+      const privateState = providersRef.current.privateStateProvider as unknown as PrivateStateProvider<
+        string,
+        ZKClinicPrivateState
+      >;
+      await privateState
+        .forContract(contractAddressRef.current)
+        .set(PRIVATE_STATE_ID, createZKClinicPrivateState(secretKey, attributes));
+      // asOf = now + 10 min: the chain rejects it once it is in the past, the circuit checks expiry against it.
+      const asOf = BigInt(Math.floor(Date.now() / 1000) + 600);
+      await callCircuit(
+        "proveEligibility",
+        [trialId, asOf],
+        "Generating zero-knowledge eligibility proof on this device...",
+        PRIVATE_STATE_ID
+      );
+      return toHex(ZKClinic.pureCircuits.trialNullifier(trialId, secretKey));
+    },
+    [providersRef, contractAddressRef, callCircuit]
   );
 
   const value: ZKClinicContextValue = useMemo(
@@ -1018,6 +1150,7 @@ export function ZKClinicProvider({ children }: PropsWithChildren): React.ReactEl
       flowMessage,
       connect,
       join,
+      deploy,
       refreshState,
       submitRequest,
       approveIssuer,
@@ -1032,7 +1165,10 @@ export function ZKClinicProvider({ children }: PropsWithChildren): React.ReactEl
       fetchAndStoreCredential,
       createTrial,
       closeTrial,
-      recordEnrollment
+      recordEnrollment,
+      issueCredentialCommitment,
+      publishTrialCriteria,
+      proveEligibility
     }),
     [
       walletNetworkId,
@@ -1048,6 +1184,7 @@ export function ZKClinicProvider({ children }: PropsWithChildren): React.ReactEl
       flowMessage,
       connect,
       join,
+      deploy,
       refreshState,
       submitRequest,
       approveIssuer,
@@ -1062,7 +1199,10 @@ export function ZKClinicProvider({ children }: PropsWithChildren): React.ReactEl
       fetchAndStoreCredential,
       createTrial,
       closeTrial,
-      recordEnrollment
+      recordEnrollment,
+      issueCredentialCommitment,
+      publishTrialCriteria,
+      proveEligibility
     ]
   );
 

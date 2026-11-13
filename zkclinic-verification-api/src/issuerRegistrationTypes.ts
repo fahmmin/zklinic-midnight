@@ -15,6 +15,8 @@ export type IssuerRegistration = {
   certificateOcrText?: string;
   ocrNameHint?: string;
   ocrSmcHint?: string;
+  /** Hash proving a Didit identity check passed for this doctor key (no personal data). */
+  identityAttestationHash?: string;
   status: IssuerRegistrationStatus;
   verificationPayloadHash?: string;
   reviewId?: string;

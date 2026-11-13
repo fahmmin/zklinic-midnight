@@ -3,6 +3,8 @@
  * Credential is signed by doctor, encrypted for patient, stored on device only.
  */
 
+import type { HealthAttributesJson } from "zkclinic-contract";
+
 export const CREDENTIAL_VALIDITY_MONTHS = 12;
 
 export interface CredentialLabResult {
@@ -13,6 +15,8 @@ export interface CredentialLabResult {
 
 /** Mirrors verification API PatientIntakeV1 — stored encrypted on the health card. */
 export type PatientIntakeV1 = {
+  /** Public half of the patient's ZK identity (hex). The doctor binds the on-chain commitment to it. */
+  zkPublicKey?: string;
   narrative?: string;
   chiefComplaint?: string;
   conditions?: Array<{
@@ -40,6 +44,8 @@ export type PatientIntakeV1 = {
 };
 
 export interface HealthCredentialPayload {
+  /** Doctor-attested attributes whose commitment is on-chain; private witness of `proveEligibility`. */
+  zkAttributes?: HealthAttributesJson;
   credentialId: string;
   patientId?: string;
   doctorPubKeyHex: string;

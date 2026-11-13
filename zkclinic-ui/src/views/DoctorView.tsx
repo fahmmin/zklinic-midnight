@@ -13,6 +13,7 @@ import { parseMedicationText } from "../lib/parseMedicationText";
 import { icd11CodeToText, icd11TextToCodes, type Icd11Candidate } from "../lib/icd11Api";
 import { friendlyErrorMessage } from "../lib/friendlyErrors";
 import {
+  DEMO_CERTIFICATE_OCR_TEXT,
   DEMO_DOCTOR_ICD10_CODES,
   DEMO_DOCTOR_MEDICATIONS_BLOCK,
   DEMO_IMR_RECORD_TEXT,
@@ -21,7 +22,19 @@ import {
   DEMO_OCR_NAME_HINT,
   DEMO_OCR_SMC_HINT
 } from "../lib/demoWorkspaceMocks";
+import { attributesFromCredential, attributesToJson, ZKClinic } from "zkclinic-contract";
+import { fromHex, toHex } from "../lib/zkIdentity";
+import { Steps } from "../components/Steps";
 import { ui } from "../ui";
+
+/** "HbA1c 8.2 %" / "eGFR: 74" / "LDL=130 mg/dL", one per line. */
+export function parseLabText(text: string): { testName: string; value: number; unit: string }[] {
+  return text
+    .split(/[\n,]/)
+    .map((line) => line.trim().match(/^(.+?)[\s:=]+(-?\d+(?:\.\d+)?)\s*(.*)$/))
+    .filter((m): m is RegExpMatchArray => !!m)
+    .map((m) => ({ testName: m[1].trim(), value: Number(m[2]), unit: m[3].trim() }));
+}
 
 const VERIFICATION_API_URL = import.meta.env.VITE_VERIFICATION_API_URL || "http://localhost:4100";
 
@@ -31,15 +44,19 @@ export function DoctorView() {
     deliverCredential,
     registerCredential,
     appendDiagnosisToCredential,
+    issueCredentialCommitment,
     revokeCredential,
     submitRequest,
+    approveIssuer,
     state,
     flowMessage,
     status,
     walletDoctorKeyHex
   } = useZKClinic();
 
-  const [requestCode, setRequestCode] = useState("");
+  const [requestCode, setRequestCode] = useState(
+    () => localStorage.getItem("zkclinic-last-request-code") ?? ""
+  );
   const [requestInfo, setRequestInfo] = useState<{
     requestId: string;
     hasCredential: boolean;
@@ -58,6 +75,9 @@ export function DoctorView() {
   const [credentialToRevoke, setCredentialToRevoke] = useState("");
   const [medicationsText, setMedicationsText] = useState(DEMO_DOCTOR_MEDICATIONS_BLOCK);
   const [error, setError] = useState<string | null>(null);
+  const [step, setStep] = useState(0);
+  const [ageText, setAgeText] = useState("52");
+  const [labsText, setLabsText] = useState("HbA1c 8.2 %\neGFR 74");
 
   // Doctor self-registration state
   const [regName, setRegName] = useState(DEMO_OCR_NAME_HINT);
@@ -69,6 +89,7 @@ export function DoctorView() {
   const [regBusy, setRegBusy] = useState(false);
   const [regMessage, setRegMessage] = useState<string | null>(null);
   const [regError, setRegError] = useState<string | null>(null);
+  const [autoApprove, setAutoApprove] = useState(false);
 
   const isDeployed = status === "deployed";
   const doctorPubKeyHex = walletDoctorKeyHex ?? null;
@@ -77,6 +98,83 @@ export function DoctorView() {
     state?.issuers?.some(
       (i) => i.doctor === doctorPubKeyHex.toLowerCase() && i.status === 2
     );
+  const isAdmin = !!doctorPubKeyHex && state?.admin === doctorPubKeyHex.toLowerCase();
+  const myRequestPending = !!doctorPubKeyHex && !!state?.pending.some((p) => p.doctor === doctorPubKeyHex.toLowerCase());
+
+  // When this wallet is also the clinic admin (demo / single-clinic setup), approve our own request as soon as it lands.
+  useEffect(() => {
+    if (!autoApprove || !myRequestPending || !doctorPubKeyHex) return;
+    setAutoApprove(false);
+    setRegMessage("Request is on-chain. Approving you as a doctor (admin wallet)…");
+    void approveIssuer(doctorPubKeyHex, {
+      nmcVerification: {
+        doctorId: regDoctorId.trim(),
+        regdNoValue: regRegNo.trim(),
+        ocrNameHint: regName.trim() || undefined,
+        ocrSmcHint: regCouncil.trim() || undefined
+      }
+    })
+      .then(() => setRegMessage("You are an approved doctor. Continue with the patient's code below."))
+      .catch((e) => setRegError(friendlyErrorMessage(e instanceof Error ? e.message : String(e))));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoApprove, myRequestPending]);
+
+  // ── Optional Didit identity check: Didit sees the ID, ZKLinic keeps only "approved" + a hash ──
+  const apiBase = VERIFICATION_API_URL.replace(/\/$/, "");
+  const [diditMode, setDiditMode] = useState<"live" | "mock" | "off">("off");
+  const [didit, setDidit] = useState<{ sessionId: string; status: string; approved: boolean } | null>(null);
+  const [diditBusy, setDiditBusy] = useState(false);
+  const diditKey = (doc: string) => `zkclinic-didit:${doc}`;
+
+  useEffect(() => {
+    void fetch(`${apiBase}/didit/config`)
+      .then((r) => (r.ok ? r.json() : { mode: "off" }))
+      .then((j: { mode?: "live" | "mock" | "off" }) => setDiditMode(j.mode ?? "off"))
+      .catch(() => setDiditMode("off"));
+  }, [apiBase]);
+
+  useEffect(() => {
+    if (!doctorPubKeyHex || diditMode === "off") return;
+    const doc = doctorPubKeyHex.toLowerCase();
+    // Didit sends the doctor back here with ?verificationSessionId=…
+    const params = new URLSearchParams(window.location.search);
+    const fromRedirect = params.get("verificationSessionId");
+    if (fromRedirect) {
+      localStorage.setItem(diditKey(doc), fromRedirect);
+      window.history.replaceState(null, "", window.location.pathname);
+    }
+    const sessionId = fromRedirect ?? localStorage.getItem(diditKey(doc));
+    if (!sessionId) return;
+    void fetch(`${apiBase}/didit/session/${encodeURIComponent(sessionId)}?doctorPubKeyHex=${doc}`)
+      .then(async (r) => {
+        const j = (await r.json()) as { status?: string; approved?: boolean; error?: string };
+        if (!r.ok) throw new Error(j.error ?? `Didit check failed (${r.status})`);
+        setDidit({ sessionId, status: j.status ?? "Not Started", approved: !!j.approved });
+      })
+      .catch((e) => setRegError(friendlyErrorMessage(e instanceof Error ? e.message : String(e))));
+  }, [doctorPubKeyHex, diditMode, apiBase]);
+
+  const startDidit = async () => {
+    if (!doctorPubKeyHex) return;
+    setRegError(null);
+    setDiditBusy(true);
+    try {
+      const r = await fetch(`${apiBase}/didit/session`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          doctorPubKeyHex: doctorPubKeyHex.toLowerCase(),
+          callback: `${window.location.origin}/app/doctor`
+        })
+      });
+      const j = (await r.json()) as { url?: string; error?: string };
+      if (!r.ok || !j.url) throw new Error(j.error ?? `Could not start Didit (${r.status})`);
+      window.location.assign(j.url);
+    } catch (e) {
+      setRegError(friendlyErrorMessage(e instanceof Error ? e.message : String(e)));
+      setDiditBusy(false);
+    }
+  };
 
   const searchIcd10 = useCallback(async (q: string) => {
     if (!q.trim()) {
@@ -125,6 +223,7 @@ export function DoctorView() {
     try {
       const info = await fetchCredentialRequest(requestCode.trim());
       setRequestInfo(info);
+      setStep(info.hasCredential ? 2 : 1);
     } catch (e) {
       setError(friendlyErrorMessage(e instanceof Error ? e.message : String(e)));
       setRequestInfo(null);
@@ -152,10 +251,6 @@ export function DoctorView() {
       setRegError("Paste or edit the IMR / register excerpt (at least 8 characters).");
       return;
     }
-    if (!regCertFile) {
-      setRegError("Attach a registration certificate PDF (required).");
-      return;
-    }
     setRegBusy(true);
     try {
       const body: Record<string, string> = {
@@ -163,10 +258,15 @@ export function DoctorView() {
         doctorId: regDoctorId.trim(),
         regdNoValue: regRegNo.trim(),
         imrRecordText: regImrText.trim(),
-        certificateOcrText: `[PDF uploaded: ${regCertFile.name}]`
+        // No file attached: the bundled sample certificate stands in (demo deployments only).
+        certificateOcrText: regCertFile
+          ? `[PDF uploaded: ${regCertFile.name}]`
+          : `[PDF uploaded: sample-certificate.pdf]
+${DEMO_CERTIFICATE_OCR_TEXT}`
       };
       if (regName.trim()) body.ocrNameHint = regName.trim();
       if (regCouncil.trim()) body.ocrSmcHint = regCouncil.trim();
+      if (didit?.approved) body.diditSessionId = didit.sessionId;
 
       const res = await fetch(`${VERIFICATION_API_URL.replace(/\/$/, "")}/issuer-registration`, {
         method: "POST",
@@ -180,6 +280,7 @@ export function DoctorView() {
 
       // Submit on-chain so admin can approve
       await submitRequest(lic);
+      if (isAdmin) setAutoApprove(true);
 
       const statusLabel: Record<string, string> = {
         pending_verification: "Pending registry verification (background check)",
@@ -193,6 +294,9 @@ export function DoctorView() {
           ` · reg ${(j.registrationId ?? "").slice(0, 12)}…`
       );
     } catch (e) {
+      const chain: unknown[] = [];
+      for (let c: unknown = e; c && chain.length < 6; c = (c as { cause?: unknown }).cause) chain.push(c);
+      console.error("[ZKLinic] doctor registration failed", ...chain.map((c) => (c instanceof Error ? `${c.name}: ${c.message}` : c)));
       setRegError(friendlyErrorMessage(e instanceof Error ? e.message : String(e)));
     } finally {
       setRegBusy(false);
@@ -259,20 +363,36 @@ export function DoctorView() {
     setError(null);
     try {
       const medications = parseMedicationText(medicationsText);
+      const age = ageText.trim() === "" ? undefined : Number(ageText);
+      if (age !== undefined && (!Number.isInteger(age) || age < 0 || age > 120)) {
+        setError("Age must be a whole number between 0 and 120");
+        return;
+      }
+      const clinical = { ageYears: age, labResults: parseLabText(labsText), medications };
       const cont = requestInfo.continuingCredentialId?.trim().replace(/^0x/i, "").toLowerCase();
       const isContinuing = !!cont && /^[0-9a-f]{64}$/.test(cont);
 
       const payload = isContinuing
         ? createCredentialPayloadContinuingCard(cont, doctorPubKeyHex, selectedCodes, undefined, {
-            medications,
+            ...clinical,
             icd11Codes: selectedIcd11.length ? selectedIcd11 : undefined,
             patientIntake: requestInfo.patientIntake
           })
         : createCredentialPayload(doctorPubKeyHex, selectedCodes, undefined, {
-            medications,
+            ...clinical,
             icd11Codes: selectedIcd11.length ? selectedIcd11 : undefined,
             patientIntake: requestInfo.patientIntake
           });
+
+      // Private eligibility: attest the attributes the ZK circuit will check, bound to the patient's ZK key.
+      // Only the commitment goes on-chain; the attributes travel inside the encrypted card.
+      const patientZkKey = requestInfo.patientIntake?.zkPublicKey?.toLowerCase();
+      let zkCommitmentHex: string | undefined;
+      if (patientZkKey && /^[0-9a-f]{64}$/.test(patientZkKey)) {
+        const attrs = attributesFromCredential(payload, crypto.getRandomValues(new Uint8Array(32)));
+        payload.zkAttributes = attributesToJson(attrs);
+        zkCommitmentHex = toHex(ZKClinic.pureCircuits.credentialCommitment(fromHex(patientZkKey), attrs));
+      }
 
       const visitNonce = randomVisitNonceHex();
       const commitment = await diagnosisVisitCommitment({
@@ -291,6 +411,7 @@ export function DoctorView() {
         await registerCredential(payload.credentialId);
       }
       await appendDiagnosisToCredential(payload.credentialId, commitment);
+      if (zkCommitmentHex) await issueCredentialCommitment(zkCommitmentHex);
 
       await deliverCredential(
         requestCode.trim().toUpperCase(),
@@ -312,7 +433,7 @@ export function DoctorView() {
         <div className={ui.sectionInner}>
           <p className={ui.sectionTitle}>Doctor</p>
           <h2 className={ui.h2}>Issue the health card</h2>
-          <p className={ui.lead}>Deploy or join a contract first — the card is what patients use for trial matching.</p>
+          <p className={ui.lead}>Tap <strong>Connect wallet</strong> above to start.</p>
         </div>
       </section>
     );
@@ -321,15 +442,7 @@ export function DoctorView() {
   return (
     <section className={ui.section} data-testid="doctor-view">
       <div className={ui.sectionInner}>
-        <p className={ui.sectionTitle}>Doctor · attests the card</p>
-        <h2 className={ui.h2}>Sign & deliver the credential</h2>
-        <p className={ui.lead}>
-          Look up the patient&apos;s request code, add this visit&apos;s diagnoses (ICD-10 and/or ICD-11).{" "}
-          <strong>New card:</strong> the contract registers one credential id, then records this visit&apos;s diagnosis
-          commitment on the card&apos;s on-chain timeline. <strong>Continuing card:</strong> when the patient flagged
-          an existing card id, you only append a new commitment — same id, same issuing doctor. Encrypted updates use a
-          key derived from that id so the patient can decrypt every visit.
-        </p>
+        <h2 className={ui.h2}>Issue a health card</h2>
 
         {flowMessage && <p className={ui.msgFlow}>{flowMessage}</p>}
         {error && (
@@ -345,9 +458,8 @@ export function DoctorView() {
             <p className={ui.sectionTitle}>Step 1 · one-time setup</p>
             <h3 className={ui.h2}>Register as a doctor</h3>
             <p className={ui.lead} style={{ maxWidth: "58ch" }}>
-              One registration path: paste an IMR / register excerpt and upload your registration certificate PDF.
-              Off-chain verification checks the excerpt and registers the certificate upload; your issuer request is
-              submitted on-chain in the same step. An admin still approves the issuer on-chain.
+              Your registration details are filled in. Tap the button: we check them, put your request on Midnight
+              {isAdmin ? ", and approve it with your admin wallet." : ", and the clinic admin approves it."}
             </p>
             {regError && (
               <p className={ui.msgError} role="alert" data-testid="doctor-reg-error">
@@ -359,6 +471,8 @@ export function DoctorView() {
                 {regMessage}
               </p>
             )}
+            <details className="zk-explain">
+              <summary>Check or edit my registration details</summary>
             <div className={ui.stackSm} style={{ maxWidth: "36rem", marginTop: "0.75rem" }}>
               <label className={ui.msgMuted}>
                 Full name
@@ -417,7 +531,7 @@ export function DoctorView() {
                 />
               </label>
               <label className={ui.msgMuted}>
-                Registration certificate PDF (required)
+                Registration certificate PDF (optional; a sample is used in this demo)
                 <input
                   type="file"
                   accept=".pdf,application/pdf"
@@ -432,11 +546,38 @@ export function DoctorView() {
                   </span>
                 ) : (
                   <span className={ui.msgMuted} style={{ fontSize: "0.75rem" }}>
-                    Choose a file to enable auto off-chain verification.
+                    No file: the sample certificate is used.
                   </span>
                 )}
               </label>
             </div>
+            </details>
+            {diditMode !== "off" && (
+              <div className="zk-didit" data-testid="didit-panel">
+                {didit?.approved ? (
+                  <p className={ui.msg} data-testid="didit-verified">
+                    ✓ Identity verified with Didit. ZKLinic keeps only this result, never your ID.
+                  </p>
+                ) : (
+                  <>
+                    <p className={ui.msgMuted}>
+                      Optional: confirm it's really you with a quick ID and selfie check by Didit. Your ID stays with
+                      Didit; ZKLinic only learns that the check passed.
+                      {didit && <> Last check: {didit.status}.</>}
+                    </p>
+                    <button
+                      type="button"
+                      className={ui.btn}
+                      data-testid="btn-didit"
+                      onClick={() => void startDidit()}
+                      disabled={diditBusy || !doctorPubKeyHex}
+                    >
+                      {diditBusy ? "Opening Didit…" : "Verify my identity with Didit"}
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
             <button
               type="button"
               className={ui.btnPrimary}
@@ -448,22 +589,18 @@ export function DoctorView() {
                 !regDoctorId.trim() ||
                 !regRegNo.trim() ||
                 regImrText.trim().length < 8 ||
-                !regCertFile
+                myRequestPending
               }
             >
-              {regBusy ? "Registering…" : "Register & submit request →"}
+              {regBusy ? "Registering…" : myRequestPending ? "Waiting for approval…" : "Register as a doctor"}
             </button>
-            <p className={ui.msgMuted} style={{ fontSize: "0.75rem", marginTop: "0.5rem" }}>
-              With IMR excerpt + PDF attached, off-chain verification completes immediately; then use Admin → Approve
-              issuer after your on-chain request appears.
-            </p>
           </div>
         )}
 
-        <div className={ui.divider} />
-
-        <p className={ui.sectionTitle}>Lookup</p>
-        <h3 className={ui.h2}>Patient request code</h3>
+        <Steps labels={["Find the patient", "Fill the card", "Sign and send"]} step={step} onStep={setStep}>
+          <div>
+        <h3 className={ui.h2}>Enter the patient&apos;s code</h3>
+        <p className={ui.lead}>The patient shows you a short code from their phone.</p>
         <div className={ui.inputRow}>
           <input
             className={ui.input}
@@ -482,7 +619,7 @@ export function DoctorView() {
             onClick={handleLookupRequest}
             disabled={!requestCode.trim()}
           >
-            Look up →
+            Find patient
           </button>
         </div>
         {requestInfo && (
@@ -543,11 +680,16 @@ export function DoctorView() {
           </div>
         )}
 
+          </div>
+
+          <div>
+        {!(requestInfo && !requestInfo.hasCredential) && (
+          <p className={ui.lead}>Find a patient in step 1 first.</p>
+        )}
         {requestInfo && !requestInfo.hasCredential && (
           <>
-            <div className={ui.divider} />
-            <p className={ui.sectionTitle}>Diagnosis</p>
-            <h3 className={ui.h2}>ICD-10 codes (NLM)</h3>
+            <h3 className={ui.h2}>Diagnosis codes</h3>
+            <p className={ui.lead}>Search and tap to add. Example values are filled in for you.</p>
             <div className={ui.relative}>
               <input
                 className={ui.input}
@@ -645,6 +787,41 @@ export function DoctorView() {
             )}
 
             <div className={ui.divider} style={{ margin: "1.25rem 0" }} />
+            <p className={ui.sectionTitle}>Attested for private proofs</p>
+            <h3 className={ui.h2}>Age & lab results</h3>
+            <p className={ui.msgMuted} style={{ marginBottom: "0.5rem" }}>
+              These, plus the diagnosis codes above, are what the patient can later prove in zero knowledge. Only a
+              commitment goes on-chain — never the values.
+              {requestInfo.patientIntake?.zkPublicKey
+                ? ""
+                : " This request has no patient ZK key, so the card will not support on-chain proofs."}
+            </p>
+            <div className={ui.inputRow}>
+              <label>
+                Age (years)
+                <input
+                  className={ui.input}
+                  inputMode="numeric"
+                  value={ageText}
+                  onChange={(e) => setAgeText(e.target.value)}
+                  data-testid="doctor-age"
+                />
+              </label>
+            </div>
+            <label htmlFor="doctor-labs" className={ui.msgMuted}>
+              Lab results, one per line (name, value, optional unit)
+            </label>
+            <textarea
+              id="doctor-labs"
+              className={ui.input}
+              rows={3}
+              placeholder={"HbA1c 8.2 %\neGFR 74"}
+              value={labsText}
+              onChange={(e) => setLabsText(e.target.value)}
+              data-testid="doctor-labs"
+            />
+
+            <div className={ui.divider} style={{ margin: "1.25rem 0" }} />
             <p className={ui.sectionTitle}>Medications</p>
             <h3 className={ui.h2}>Prescriptions & supplements</h3>
             <p className={ui.msgMuted} style={{ marginBottom: "0.5rem" }}>
@@ -661,8 +838,22 @@ export function DoctorView() {
           </>
         )}
 
-        {requestInfo && !requestInfo.hasCredential && (selectedCodes.length > 0 || selectedIcd11.length > 0) && (
-          <div style={{ marginTop: "1.25rem" }}>
+          </div>
+
+          <div>
+            <h3 className={ui.h2}>Sign and send</h3>
+        {!requestInfo && <p className={ui.lead}>Find a patient in step 1 first.</p>}
+        {requestInfo?.hasCredential && (
+          <p className={ui.msg} data-testid="doctor-card-sent">
+            Card sent. The patient can collect it on their phone now.
+          </p>
+        )}
+        {requestInfo && !requestInfo.hasCredential && (
+          <div style={{ marginTop: "0.5rem" }}>
+            <p className={ui.lead}>
+              {selectedCodes.length + selectedIcd11.length} diagnosis code(s), age {ageText || "not set"},{" "}
+              {parseLabText(labsText).length} lab result(s). Your wallet will ask you to approve up to three steps.
+            </p>
             <button
               type="button"
               className={ui.btnArrow}
@@ -670,17 +861,17 @@ export function DoctorView() {
               onClick={handleSignAndDeliver}
               disabled={!isApprovedDoctor}
             >
-              Sign & deliver
+              Sign and send to patient
             </button>
           </div>
         )}
+          </div>
+        </Steps>
 
         {isApprovedDoctor && (
-          <>
-            <div className={ui.divider} />
-            <p className={ui.sectionTitle}>Safety</p>
-            <h3 className={ui.h2}>Revoke credential</h3>
-            <p className={ui.lead}>On-chain revocation by credential ID (64 hex).</p>
+          <details className="zk-explain" style={{ marginTop: "1.5rem" }}>
+            <summary>Cancel a card I issued</summary>
+            <p className={ui.lead}>Paste the card ID (64 characters).</p>
             <div className={ui.inputRow}>
               <input
                 className={ui.input}
@@ -704,10 +895,10 @@ export function DoctorView() {
                 }}
                 disabled={credentialToRevoke.trim().length !== 64}
               >
-                Revoke
+                Cancel card
               </button>
             </div>
-          </>
+          </details>
         )}
       </div>
     </section>

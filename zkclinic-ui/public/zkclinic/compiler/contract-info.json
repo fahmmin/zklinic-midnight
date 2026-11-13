@@ -1,7 +1,8 @@
 {
-  "compiler-version": "0.29.0",
-  "language-version": "0.21.0",
-  "runtime-version": "0.14.0",
+  "compiler-version": "0.36.1",
+  "compiler-commit": "7fa3a117c5e7efe9d2c51da04263e5f0b3509144",
+  "language-version": "0.28.0",
+  "runtime-version": "0.21.0",
   "circuits": [
     {
       "name": "submitIssuerRequest",
@@ -251,12 +252,269 @@
       }
     },
     {
+      "name": "patientPublicKey",
+      "pure": true,
+      "proof": false,
+      "arguments": [
+        {
+          "name": "sk",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    },
+    {
+      "name": "credentialCommitment",
+      "pure": true,
+      "proof": false,
+      "arguments": [
+        {
+          "name": "ownerPk",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        },
+        {
+          "name": "attrs",
+          "type": {
+            "type-name": "Struct",
+            "name": "HealthAttributes",
+            "elements": [
+              {
+                "name": "ageYears",
+                "type": {
+                  "type-name": "Uint",
+                  "maxval": 255
+                }
+              },
+              {
+                "name": "diagnoses",
+                "type": {
+                  "type-name": "Vector",
+                  "length": 4,
+                  "type": {
+                    "type-name": "Bytes",
+                    "length": 32
+                  }
+                }
+              },
+              {
+                "name": "labs",
+                "type": {
+                  "type-name": "Vector",
+                  "length": 4,
+                  "type": {
+                    "type-name": "Struct",
+                    "name": "LabResult",
+                    "elements": [
+                      {
+                        "name": "code",
+                        "type": {
+                          "type-name": "Bytes",
+                          "length": 32
+                        }
+                      },
+                      {
+                        "name": "value",
+                        "type": {
+                          "type-name": "Uint",
+                          "maxval": 4294967295
+                        }
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "name": "expiresAt",
+                "type": {
+                  "type-name": "Uint",
+                  "maxval": 18446744073709551615
+                }
+              },
+              {
+                "name": "salt",
+                "type": {
+                  "type-name": "Bytes",
+                  "length": 32
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    },
+    {
+      "name": "trialNullifier",
+      "pure": true,
+      "proof": false,
+      "arguments": [
+        {
+          "name": "trialId",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        },
+        {
+          "name": "sk",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    },
+    {
+      "name": "issueCredentialCommitment",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "commitment",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      }
+    },
+    {
+      "name": "publishTrialCriteria",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "trialId",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        },
+        {
+          "name": "criteria",
+          "type": {
+            "type-name": "Struct",
+            "name": "EligibilityCriteria",
+            "elements": [
+              {
+                "name": "minAge",
+                "type": {
+                  "type-name": "Uint",
+                  "maxval": 255
+                }
+              },
+              {
+                "name": "maxAge",
+                "type": {
+                  "type-name": "Uint",
+                  "maxval": 255
+                }
+              },
+              {
+                "name": "requiredDiagnosis",
+                "type": {
+                  "type-name": "Bytes",
+                  "length": 32
+                }
+              },
+              {
+                "name": "excludedDiagnosis",
+                "type": {
+                  "type-name": "Bytes",
+                  "length": 32
+                }
+              },
+              {
+                "name": "labCode",
+                "type": {
+                  "type-name": "Bytes",
+                  "length": 32
+                }
+              },
+              {
+                "name": "labMin",
+                "type": {
+                  "type-name": "Uint",
+                  "maxval": 4294967295
+                }
+              },
+              {
+                "name": "labMax",
+                "type": {
+                  "type-name": "Uint",
+                  "maxval": 4294967295
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      }
+    },
+    {
+      "name": "proveEligibility",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "trialId",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        },
+        {
+          "name": "asOf",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 18446744073709551615
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    },
+    {
       "name": "recordEnrollment",
       "pure": false,
       "proof": true,
       "arguments": [
         {
           "name": "trialId",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        },
+        {
+          "name": "nullifier",
           "type": {
             "type-name": "Bytes",
             "length": 32
@@ -271,7 +529,569 @@
     }
   ],
   "witnesses": [
+    {
+      "name": "patientSecretKey",
+      "arguments": [
+      ],
+      "result type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    },
+    {
+      "name": "healthAttributes",
+      "arguments": [
+      ],
+      "result type": {
+        "type-name": "Struct",
+        "name": "HealthAttributes",
+        "elements": [
+          {
+            "name": "ageYears",
+            "type": {
+              "type-name": "Uint",
+              "maxval": 255
+            }
+          },
+          {
+            "name": "diagnoses",
+            "type": {
+              "type-name": "Vector",
+              "length": 4,
+              "type": {
+                "type-name": "Bytes",
+                "length": 32
+              }
+            }
+          },
+          {
+            "name": "labs",
+            "type": {
+              "type-name": "Vector",
+              "length": 4,
+              "type": {
+                "type-name": "Struct",
+                "name": "LabResult",
+                "elements": [
+                  {
+                    "name": "code",
+                    "type": {
+                      "type-name": "Bytes",
+                      "length": 32
+                    }
+                  },
+                  {
+                    "name": "value",
+                    "type": {
+                      "type-name": "Uint",
+                      "maxval": 4294967295
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "name": "expiresAt",
+            "type": {
+              "type-name": "Uint",
+              "maxval": 18446744073709551615
+            }
+          },
+          {
+            "name": "salt",
+            "type": {
+              "type-name": "Bytes",
+              "length": 32
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "credentialPath",
+      "arguments": [
+        {
+          "name": "commitment",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        }
+      ],
+      "result type": {
+        "type-name": "Struct",
+        "name": "MerkleTreePath",
+        "elements": [
+          {
+            "name": "leaf",
+            "type": {
+              "type-name": "Bytes",
+              "length": 32
+            }
+          },
+          {
+            "name": "path",
+            "type": {
+              "type-name": "Vector",
+              "length": 16,
+              "type": {
+                "type-name": "Struct",
+                "name": "MerkleTreePathEntry",
+                "elements": [
+                  {
+                    "name": "sibling",
+                    "type": {
+                      "type-name": "Struct",
+                      "name": "MerkleTreeDigest",
+                      "elements": [
+                        {
+                          "name": "field",
+                          "type": {
+                            "type-name": "Field"
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "name": "goes_left",
+                    "type": {
+                      "type-name": "Boolean"
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "recordApplication",
+      "arguments": [
+        {
+          "name": "trialId",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        },
+        {
+          "name": "nullifier",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        }
+      ],
+      "result type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      }
+    }
   ],
   "contracts": [
+  ],
+  "ledger": [
+    {
+      "name": "admin",
+      "index": 0,
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Struct",
+        "name": "ZswapCoinPublicKey",
+        "elements": [
+          {
+            "name": "bytes",
+            "type": {
+              "type-name": "Bytes",
+              "length": 32
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "pendingIssuers",
+      "index": 1,
+      "exported": true,
+      "storage": "Map",
+      "key": {
+        "type-name": "Struct",
+        "name": "ZswapCoinPublicKey",
+        "elements": [
+          {
+            "name": "bytes",
+            "type": {
+              "type-name": "Bytes",
+              "length": 32
+            }
+          }
+        ]
+      },
+      "value": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    },
+    {
+      "name": "issuers",
+      "index": 2,
+      "exported": true,
+      "storage": "Map",
+      "key": {
+        "type-name": "Struct",
+        "name": "ZswapCoinPublicKey",
+        "elements": [
+          {
+            "name": "bytes",
+            "type": {
+              "type-name": "Bytes",
+              "length": 32
+            }
+          }
+        ]
+      },
+      "value": {
+        "type-name": "Struct",
+        "name": "IssuerRecord",
+        "elements": [
+          {
+            "name": "doctorKey",
+            "type": {
+              "type-name": "Struct",
+              "name": "ZswapCoinPublicKey",
+              "elements": [
+                {
+                  "name": "bytes",
+                  "type": {
+                    "type-name": "Bytes",
+                    "length": 32
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "licenseHash",
+            "type": {
+              "type-name": "Bytes",
+              "length": 32
+            }
+          },
+          {
+            "name": "attestationHash",
+            "type": {
+              "type-name": "Bytes",
+              "length": 32
+            }
+          },
+          {
+            "name": "issuerVerificationHash",
+            "type": {
+              "type-name": "Bytes",
+              "length": 32
+            }
+          },
+          {
+            "name": "status",
+            "type": {
+              "type-name": "Enum",
+              "name": "IssuerStatus",
+              "elements": [
+                "None",
+                "Pending",
+                "Approved",
+                "Revoked"
+              ]
+            }
+          },
+          {
+            "name": "submittedAt",
+            "type": {
+              "type-name": "Uint",
+              "maxval": 18446744073709551615
+            }
+          },
+          {
+            "name": "approvedAt",
+            "type": {
+              "type-name": "Uint",
+              "maxval": 18446744073709551615
+            }
+          },
+          {
+            "name": "revokedAt",
+            "type": {
+              "type-name": "Uint",
+              "maxval": 18446744073709551615
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "issuedCredentials",
+      "index": 3,
+      "exported": true,
+      "storage": "Map",
+      "key": {
+        "type-name": "Bytes",
+        "length": 32
+      },
+      "value": {
+        "type-name": "Struct",
+        "name": "ZswapCoinPublicKey",
+        "elements": [
+          {
+            "name": "bytes",
+            "type": {
+              "type-name": "Bytes",
+              "length": 32
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "revokedCredentials",
+      "index": 4,
+      "exported": true,
+      "storage": "Set",
+      "type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    },
+    {
+      "name": "credentialDiagnosisNextIndex",
+      "index": 5,
+      "exported": true,
+      "storage": "Map",
+      "key": {
+        "type-name": "Bytes",
+        "length": 32
+      },
+      "value": {
+        "type-name": "Uint",
+        "maxval": 18446744073709551615
+      }
+    },
+    {
+      "name": "diagnosisCommitmentBySlot",
+      "index": 6,
+      "exported": true,
+      "storage": "Map",
+      "key": {
+        "type-name": "Bytes",
+        "length": 32
+      },
+      "value": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    },
+    {
+      "name": "trials",
+      "index": 7,
+      "exported": true,
+      "storage": "Map",
+      "key": {
+        "type-name": "Bytes",
+        "length": 32
+      },
+      "value": {
+        "type-name": "Struct",
+        "name": "TrialRecord",
+        "elements": [
+          {
+            "name": "manager",
+            "type": {
+              "type-name": "Struct",
+              "name": "ZswapCoinPublicKey",
+              "elements": [
+                {
+                  "name": "bytes",
+                  "type": {
+                    "type-name": "Bytes",
+                    "length": 32
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "slotsTotal",
+            "type": {
+              "type-name": "Uint",
+              "maxval": 18446744073709551615
+            }
+          },
+          {
+            "name": "slotsFilled",
+            "type": {
+              "type-name": "Uint",
+              "maxval": 18446744073709551615
+            }
+          },
+          {
+            "name": "deadline",
+            "type": {
+              "type-name": "Uint",
+              "maxval": 18446744073709551615
+            }
+          },
+          {
+            "name": "status",
+            "type": {
+              "type-name": "Enum",
+              "name": "TrialStatus",
+              "elements": [
+                "Open",
+                "Closed",
+                "Full"
+              ]
+            }
+          },
+          {
+            "name": "criteriaHash",
+            "type": {
+              "type-name": "Bytes",
+              "length": 32
+            }
+          },
+          {
+            "name": "eligibilityThresholdBps",
+            "type": {
+              "type-name": "Uint",
+              "maxval": 18446744073709551615
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "credentialCommitments",
+      "index": 8,
+      "exported": true,
+      "storage": "HistoricMerkleTree",
+      "depth": 16,
+      "type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    },
+    {
+      "name": "credentialCommitmentCount",
+      "index": 9,
+      "exported": true,
+      "storage": "Counter"
+    },
+    {
+      "name": "trialCriteria",
+      "index": 10,
+      "exported": true,
+      "storage": "Map",
+      "key": {
+        "type-name": "Bytes",
+        "length": 32
+      },
+      "value": {
+        "type-name": "Struct",
+        "name": "EligibilityCriteria",
+        "elements": [
+          {
+            "name": "minAge",
+            "type": {
+              "type-name": "Uint",
+              "maxval": 255
+            }
+          },
+          {
+            "name": "maxAge",
+            "type": {
+              "type-name": "Uint",
+              "maxval": 255
+            }
+          },
+          {
+            "name": "requiredDiagnosis",
+            "type": {
+              "type-name": "Bytes",
+              "length": 32
+            }
+          },
+          {
+            "name": "excludedDiagnosis",
+            "type": {
+              "type-name": "Bytes",
+              "length": 32
+            }
+          },
+          {
+            "name": "labCode",
+            "type": {
+              "type-name": "Bytes",
+              "length": 32
+            }
+          },
+          {
+            "name": "labMin",
+            "type": {
+              "type-name": "Uint",
+              "maxval": 4294967295
+            }
+          },
+          {
+            "name": "labMax",
+            "type": {
+              "type-name": "Uint",
+              "maxval": 4294967295
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "eligibilityProofs",
+      "index": 11,
+      "exported": true,
+      "storage": "Map",
+      "key": {
+        "type-name": "Bytes",
+        "length": 32
+      },
+      "value": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    },
+    {
+      "name": "trialEligibleCount",
+      "index": 12,
+      "exported": true,
+      "storage": "Map",
+      "key": {
+        "type-name": "Bytes",
+        "length": 32
+      },
+      "value": {
+        "type-name": "Uint",
+        "maxval": 18446744073709551615
+      }
+    },
+    {
+      "name": "enrolledProofs",
+      "index": 13,
+      "exported": true,
+      "storage": "Set",
+      "type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    }
   ]
 }

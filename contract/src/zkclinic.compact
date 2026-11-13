@@ -1,4 +1,4 @@
-pragma language_version 0.21;
+pragma language_version 0.28;
 import CompactStandardLibrary;
 
 export enum IssuerStatus {
@@ -212,37 +212,169 @@ export circuit closeTrial(trialId: Bytes<32>): [] {
     return [];
 }
 
-// Milestone 3: Manager records one enrollment (demo / off-chain verified patient)
-export circuit recordEnrollment(trialId: Bytes<32>): [] {
-    const caller = ownPublicKey();
-    assert(trials.member(disclose(trialId)), "Trial not found");
-    const t = trials.lookup(disclose(trialId));
-    assert(t.manager == caller, "Only trial manager can record enrollment");
+// Internal: consume one slot, flipping the trial to Full on the last one.
+circuit fillOneSlot(trialId: Bytes<32>): [] {
+    const t = trials.lookup(trialId);
     assert(t.status == TrialStatus.Open, "Trial not open");
     assert(t.slotsFilled < t.slotsTotal, "No slots left");
     const newFilled = (t.slotsFilled + 1) as Uint<64>;
-    if (newFilled == t.slotsTotal) {
-        const updated = TrialRecord {
-            manager: t.manager,
-            slotsTotal: t.slotsTotal,
-            slotsFilled: newFilled,
-            deadline: t.deadline,
-            status: TrialStatus.Full,
-            criteriaHash: t.criteriaHash,
-            eligibilityThresholdBps: t.eligibilityThresholdBps,
-        };
-        trials.insert(disclose(trialId), disclose(updated));
-    } else {
-        const updated = TrialRecord {
-            manager: t.manager,
-            slotsTotal: t.slotsTotal,
-            slotsFilled: newFilled,
-            deadline: t.deadline,
-            status: TrialStatus.Open,
-            criteriaHash: t.criteriaHash,
-            eligibilityThresholdBps: t.eligibilityThresholdBps,
-        };
-        trials.insert(disclose(trialId), disclose(updated));
+    trials.insert(trialId, TrialRecord {
+        manager: t.manager,
+        slotsTotal: t.slotsTotal,
+        slotsFilled: newFilled,
+        deadline: t.deadline,
+        status: newFilled == t.slotsTotal ? TrialStatus.Full : TrialStatus.Open,
+        criteriaHash: t.criteriaHash,
+        eligibilityThresholdBps: t.eligibilityThresholdBps,
+    });
+    return [];
+}
+
+// ---------------------------------------------------------------------------
+// Wave 3: private eligibility. The patient's clinical attributes live only in
+// their private state. The public ledger learns one thing per application:
+// "an unlinkable pseudonym holds a doctor-attested credential that satisfies
+// this trial's criteria".
+// ---------------------------------------------------------------------------
+
+export struct LabResult {
+    /** Normalized lab test name, UTF-8, zero padded. Zero bytes = empty slot. */
+    code: Bytes<32>;
+    /** Value x100 (two fixed decimals). */
+    value: Uint<32>;
+}
+
+/** Doctor-attested attributes. Never written to the ledger; only a commitment is. */
+export struct HealthAttributes {
+    ageYears: Uint<8>;
+    /** Normalized ICD codes, UTF-8, zero padded; unused slots are zero bytes. */
+    diagnoses: Vector<4, Bytes<32>>;
+    labs: Vector<4, LabResult>;
+    /** Unix seconds. */
+    expiresAt: Uint<64>;
+    salt: Bytes<32>;
+}
+
+/** Machine-checkable trial criteria (public). Zero bytes = "no such rule". */
+export struct EligibilityCriteria {
+    minAge: Uint<8>;
+    maxAge: Uint<8>;
+    requiredDiagnosis: Bytes<32>;
+    excludedDiagnosis: Bytes<32>;
+    labCode: Bytes<32>;
+    labMin: Uint<32>;
+    labMax: Uint<32>;
+}
+
+/** Anonymity set: every attested credential commitment, from every doctor. */
+export ledger credentialCommitments: HistoricMerkleTree<16, Bytes<32>>;
+export ledger credentialCommitmentCount: Counter;
+export ledger trialCriteria: Map<Bytes<32>, EligibilityCriteria>;
+/** nullifier (per-trial pseudonym) -> trialId it was proven eligible for. */
+export ledger eligibilityProofs: Map<Bytes<32>, Bytes<32>>;
+export ledger trialEligibleCount: Map<Bytes<32>, Uint<64>>;
+export ledger enrolledProofs: Set<Bytes<32>>;
+
+witness patientSecretKey(): Bytes<32>;
+witness healthAttributes(): HealthAttributes;
+witness credentialPath(commitment: Bytes<32>): MerkleTreePath<16, Bytes<32>>;
+/** Lets the patient's private state remember where it applied. */
+witness recordApplication(trialId: Bytes<32>, nullifier: Bytes<32>): [];
+
+/** Public half of the patient's secret; this is what the patient hands the doctor. */
+export circuit patientPublicKey(sk: Bytes<32>): Bytes<32> {
+    return persistentHash<Vector<2, Bytes<32>>>([pad(32, "zkclinic:pk:v1"), sk]);
+}
+
+export circuit credentialCommitment(ownerPk: Bytes<32>, attrs: HealthAttributes): Bytes<32> {
+    return persistentHash<Vector<3, Bytes<32>>>(
+        [pad(32, "zkclinic:cred:v1"), ownerPk, persistentHash<HealthAttributes>(attrs)]);
+}
+
+/** Per-trial pseudonym: stable for (patient, trial), unlinkable across trials. */
+export circuit trialNullifier(trialId: Bytes<32>, sk: Bytes<32>): Bytes<32> {
+    return persistentHash<Vector<3, Bytes<32>>>([pad(32, "zkclinic:nul:v1"), trialId, sk]);
+}
+
+/** Approved doctor attests a credential by adding its commitment to the tree. */
+export circuit issueCredentialCommitment(commitment: Bytes<32>): [] {
+    const caller = ownPublicKey();
+    assert(issuers.member(caller), "Caller is not a registered issuer");
+    assert(issuers.lookup(caller).status == IssuerStatus.Approved, "Issuer must be approved to attest credentials");
+    credentialCommitments.insert(disclose(commitment));
+    credentialCommitmentCount.increment(1);
+    return [];
+}
+
+/** Manager publishes machine-checkable criteria once; they cannot be changed afterwards. */
+export circuit publishTrialCriteria(trialId: Bytes<32>, criteria: EligibilityCriteria): [] {
+    const tid = disclose(trialId);
+    const c = disclose(criteria);
+    assert(trials.member(tid), "Trial not found");
+    assert(trials.lookup(tid).manager == ownPublicKey(), "Only trial manager can publish criteria");
+    assert(!trialCriteria.member(tid), "Criteria already published");
+    assert(c.minAge <= c.maxAge, "minAge cannot exceed maxAge");
+    assert(c.labMin <= c.labMax, "labMin cannot exceed labMax");
+    assert(c.requiredDiagnosis != default<Bytes<32>>, "Required diagnosis missing");
+    trialCriteria.insert(tid, c);
+    return [];
+}
+
+/**
+ * Patient proves eligibility in zero knowledge. Public output: a nullifier.
+ * Private inputs (witnesses): secret key, attributes, Merkle path.
+ * `asOf` is a public timestamp the prover picks (now + slack); the chain checks it is
+ * not in the past and the circuit checks the credential outlives it.
+ */
+export circuit proveEligibility(trialId: Bytes<32>, asOf: Uint<64>): Bytes<32> {
+    const tid = disclose(trialId);
+    const now = disclose(asOf);
+    assert(trials.member(tid), "Trial not found");
+    assert(trials.lookup(tid).status == TrialStatus.Open, "Trial not open");
+    assert(trialCriteria.member(tid), "Trial has no on-chain criteria");
+    const c = trialCriteria.lookup(tid);
+
+    const sk = patientSecretKey();
+    const attrs = healthAttributes();
+    const commitment = credentialCommitment(patientPublicKey(sk), attrs);
+    const path = credentialPath(commitment);
+    assert(path.leaf == commitment, "Merkle path is not for this credential");
+    assert(credentialCommitments.checkRoot(disclose(merkleTreePathRoot<16, Bytes<32>>(path))),
+        "Credential was not attested by an approved doctor");
+
+    assert(blockTimeLte(now), "asOf is in the past");
+    assert(attrs.expiresAt > now, "Credential expired");
+    assert(attrs.ageYears >= c.minAge && attrs.ageYears <= c.maxAge, "Age outside trial range");
+    assert(fold((hit, d) => hit || d == c.requiredDiagnosis, false, attrs.diagnoses),
+        "Required diagnosis not present");
+    if (c.excludedDiagnosis != default<Bytes<32>>) {
+        assert(!fold((hit, d) => hit || d == c.excludedDiagnosis, false, attrs.diagnoses),
+            "Excluded diagnosis present");
     }
+    if (c.labCode != default<Bytes<32>>) {
+        assert(fold((hit, l) => hit || (l.code == c.labCode && l.value >= c.labMin && l.value <= c.labMax),
+            false, attrs.labs), "Lab requirement not met");
+    }
+
+    const nul = disclose(trialNullifier(tid, sk));
+    assert(!eligibilityProofs.member(nul), "Already proven for this trial");
+    eligibilityProofs.insert(nul, tid);
+    const prior = trialEligibleCount.member(tid) ? trialEligibleCount.lookup(tid) : 0 as Uint<64>;
+    trialEligibleCount.insert(tid, (prior + 1) as Uint<64>);
+    recordApplication(tid, nul);
+    return nul;
+}
+
+/** Manager enrolls a pseudonym. Only possible for a pseudonym that proved eligibility for this trial. */
+export circuit recordEnrollment(trialId: Bytes<32>, nullifier: Bytes<32>): [] {
+    const tid = disclose(trialId);
+    const nul = disclose(nullifier);
+    assert(trials.member(tid), "Trial not found");
+    assert(trials.lookup(tid).manager == ownPublicKey(), "Only trial manager can record enrollment");
+    assert(eligibilityProofs.member(nul), "No eligibility proof for this pseudonym");
+    assert(eligibilityProofs.lookup(nul) == tid, "Proof is bound to a different trial");
+    assert(!enrolledProofs.member(nul), "Pseudonym already enrolled");
+    enrolledProofs.insert(nul);
+    fillOneSlot(tid);
     return [];
 }

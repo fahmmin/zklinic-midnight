@@ -1,126 +1,147 @@
-# ZKClinic
+# ZKLinic
 
-> **Prove you qualify for a clinical trial — without handing over your medical record.**
-> ZKClinic is a ZK-native clinical trial recruitment protocol built on [Midnight Network](https://midnight.network).
+[![CI](https://github.com/fahmmin/zklinic/actions/workflows/ci.yml/badge.svg)](https://github.com/fahmmin/zklinic/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-**Demo video:** [https://youtu.be/RYE_c_51CQw](https://youtu.be/RYE_c_51CQw)
+**Prove you qualify for a clinical trial without showing anyone your medical record.** Built on [Midnight](https://midnight.network).
 
-**Pitch deck:** [zklinic-pptx.pdf (Google Drive)](https://drive.google.com/file/d/1Y8k4u9DnwWxGKQ2y9fn9XEg4be3FCf4J/view?usp=sharing)
+Most clinical trials miss their recruitment targets. Eligible patients exist, but finding them means asking people to hand a full medical chart to a sponsor they have never met. ZKLinic removes that step: a licensed doctor attests a patient's health facts once, and the patient then proves "I meet this trial's criteria" in zero knowledge. The recruiter learns that an anonymous applicant is eligible. Nothing else.
 
-> **Heads-up on the hosted backend.** The demo Verification API runs on a free hosting tier (Render) with limited resources. After a period of idle time it goes to sleep, and under load it can be slow or temporarily unavailable — so the backend may not respond on the first requests (give it up to a minute to wake up). The app header shows a live **API status** pill (*online* / *waking up…*) so you can tell. For a fully reliable run, start the API locally (see [Quick start](#quick-start)).
-
----
-
-## The problem it solves
-
-ZKLinic is a ZK-native clinical trial recruitment protocol built on Midnight Network. It solves the single most expensive problem in medical research - 85% of clinical trials fail to recruit enough patients on time, not because eligible patients don't exist, but because finding them requires those patients to hand their entire medical record to a pharma company they've never met.
-
-Here is exactly where Midnight sits in the architecture. A doctor signs a structured health credential for their patient - diagnosis codes, lab values, medication history - using their on-chain registered wallet. The credential lives on the patient's device. It never touches any server. When the patient applies for a trial, ZKLinic generates a ZK proof on their device that checks their credential against the trial's eligibility criteria. That proof - containing only boolean results per criterion, no clinical data - is posted to Midnight's public ledger. The trial recruiter queries the proof ID and sees exactly one thing: this person is eligible, criterion by criterion, verified by a licensed physician, proven by cryptography. They see nothing else.
-
-
-What is verified on-chain: credential issuer validity, eligibility booleans, proof binding to a specific trial. What stays private: the patient's identity, their exact diagnosis, their lab values, their age, their medication history, every clinical detail that produced those booleans. The verifier is the clinical trial recruiter. What they need to see is a yes or no per criterion, backed by a doctor's signature and a ZK proof they can verify independently on the Midnight explorer. That is all they get. That is all they need.
-ZKLinic is not a diagnostic app. It is not a medical records platform. It is the trust infrastructure that lets a patient prove they qualify for a trial without becoming a data source for the institution running it.
+ZKLinic is not a diagnostic app or a records platform. It is the trust layer between a patient's chart and a recruiter's eligibility question.
 
 ---
 
-## How it looks
+## What the chain sees, and what it never sees
 
-| | |
+| Stays on the patient's device (private state / witnesses) | Public on the Midnight ledger |
 | --- | --- |
-| **Health card** — the credential lives on the patient's device only. The card shows status, validity and exactly what is (pass/fail per rule + a proof ID) and is not (diagnosis, labs, medications, identity) shared with a trial. | ![Health card on this device](docs/images/health-card.png) |
-| **Trial manager + wallet** — a trial manager publishes eligibility criteria and submits the transaction from their [1AM](https://1am.xyz/) wallet on Midnight Preprod. | ![Trial programs page with the 1AM wallet submitting a transaction](docs/images/trial-manager-wallet.png) |
-| **On-chain confirmation** — every trial action (create, enroll, close) is a confirmed Midnight transaction; slots and status are enforced by the contract. | ![Trials listed with slots and status after confirmed transactions](docs/images/trial-onchain-confirmed.png) |
+| ZK secret key | Approved doctors (issuer registry) |
+| Age, diagnosis codes, lab values, credential expiry | A Merkle tree of credential **commitments** (hashes only) |
+| Which commitment in the tree is theirs | Each trial's machine-checkable criteria |
+| Which other trials they applied to | One **nullifier** per (patient, trial): the applicant's pseudonym |
+| | Slot counts and enrollment of pseudonyms |
+
+Three properties follow, and each is enforced by the contract and covered by tests:
+
+- **Anonymous among all patients.** The proof shows membership in the commitment tree without revealing which leaf, so not even the issuing doctor can tell which patient applied.
+- **Unlinkable across trials.** The nullifier is `hash(trialId, secretKey)`. The same patient gets an unrelated pseudonym in every trial.
+- **No fake or replayed enrollments.** `recordEnrollment` only accepts a pseudonym that proved eligibility for that exact trial, once.
+
+## How it works
+
+```mermaid
+sequenceDiagram
+  participant D as Doctor
+  participant P as Patient (device)
+  participant L as Midnight ledger
+  participant M as Trial manager
+
+  D->>L: submitIssuerRequest / admin approveIssuer
+  P->>D: ZK public key (hash of secret key)
+  D->>L: issueCredentialCommitment(hash(pk, attributes, salt))
+  D-->>P: attributes + salt, inside the encrypted health card
+  M->>L: createTrial + publishTrialCriteria(age range, diagnosis, lab range)
+  Note over P: proveEligibility runs locally.<br/>Witnesses: secret key, attributes, Merkle path
+  P->>L: ZK proof + nullifier (no clinical data)
+  M->>L: recordEnrollment(trialId, nullifier)
+```
+
+The `proveEligibility` circuit ([contract/src/zkclinic.compact](contract/src/zkclinic.compact)) asserts, entirely inside the proof:
+
+1. the patient knows a secret key and attributes whose commitment is in the doctor-attested Merkle tree,
+2. the credential is not expired,
+3. age is within the trial range,
+4. the required diagnosis is present and the excluded diagnosis is absent,
+5. the required lab value is within range,
+6. this patient has not already proven for this trial.
+
+## Midnight integration
+
+| Piece | Where | Notes |
+| --- | --- | --- |
+| Compact contract | [contract/src/zkclinic.compact](contract/src/zkclinic.compact) | 13 provable circuits, 3 pure circuits, language 0.28, compiler 0.36.1 (ledger v9) |
+| Witnesses and private state | [contract/src/witnesses.ts](contract/src/witnesses.ts) | 4 witnesses: `patientSecretKey`, `healthAttributes`, `credentialPath`, `recordApplication` (updates private state) |
+| App data to circuit structs | [contract/src/eligibility.ts](contract/src/eligibility.ts) | One mapping shared by doctor, patient and manager, so the bytes compared in-circuit agree |
+| Simulator and tests | [contract/src/test](contract/src/test) | Runs the compiled contract, one private state per actor |
+| Web UI | [zkclinic-ui](zkclinic-ui) | React + Vite, 1AM / DApp Connector, proofs generated in the browser session |
+| CLI | [zkclinic-cli](zkclinic-cli) | Headless Wallet SDK flows for every role, plus deploy |
+| Verification API | [zkclinic-verification-api](zkclinic-verification-api) | Doctor licence checks, request and encrypted-card relay, human-readable trial metadata. Never sees the ZK secret key |
+
+Dual-ledger use in one sentence: public state holds the registry, commitments, criteria and nullifiers; private state holds the secret key, the attested attributes and the patient's own application history, and only the witnesses read it.
+
+## Try it in one minute (no wallet)
+
+Open `/demo` in the web UI (`npm run dev -w zkclinic-ui`, then the "Try the 1-minute demo" button). Three taps take a patient from health card to enrolled, and a second patient shows a rejection. The buttons run the real compiled contract circuits inside the page through the simulator; a side panel shows what stays on the phone and what the study can see. It is built phone-first: large type, one action per screen, the button pinned at the bottom.
+
+## Test it in two minutes (no network, no wallet)
+
+```bash
+npm ci
+```
+
+```bash
+npm test
+```
+
+70 tests across four packages. The contract suite (40 tests) executes the **compiled contract's real circuit logic** through a simulator, not a mock:
+
+- every eligibility rule, including inclusive boundaries and skipped optional rules
+- expired credential, stale timestamp, closed trial, trial without criteria
+- credential no doctor attested, attributes edited after attestation, a stolen Merkle path
+- double proof for one trial, replay of a proof into another trial, over-enrollment
+- a privacy test that dumps the entire public state and asserts it contains no secret key, patient public key, salt, or unrelated diagnosis
+
+To recompile the contract yourself (Linux, macOS or WSL):
+
+```bash
+npm run compact -w contract
+```
+
+CI compiles the contract, typechecks and runs all tests on every push: [.github/workflows/ci.yml](.github/workflows/ci.yml).
+
+## What changed in Wave 3
+
+Wave 2 shipped the registries and the product flow, but eligibility was computed off-chain and reported to an API. The contract had no witnesses and no private state. Wave 3 makes the core claim real:
+
+- **New private-state circuit `proveEligibility`** with four witnesses, a `HistoricMerkleTree` of credential commitments and per-trial nullifiers.
+- **New circuits `issueCredentialCommitment` and `publishTrialCriteria`**; criteria are immutable once published.
+- **`recordEnrollment` is now proof-bound.** In Wave 2 a manager could bump the slot counter freely.
+- **Tests now run the compiled contract.** The Wave 2 contract tests exercised a hand-written TypeScript model; those are deleted.
+- **UI**: the doctor attests age and labs, the patient's "Create proof" is an actual Midnight transaction, and the manager sees "Verified on Midnight" per applicant and can enroll only verified pseudonyms.
+- **CLI**: doctor attest, patient prove, manager publish-criteria and proof-bound enroll.
+- **Guided demo and phone layout**: `/demo` walkthrough; patient, doctor and study-manager screens rebuilt as three-step flows with prefilled values; bottom tab bar, larger type and tap targets, optional fields collapsed.
+- **Ported to Midnight's ledger v9 hard fork**: compiler 0.36.1, compact-runtime 0.21 (async circuits), midnight-js 5.0 and wallet-sdk 2.0. The browser deploys and calls through the official DApp-connector providers, so 1AM proves, pays DUST and submits; no local proof server is needed for the web app. Deployed from the browser at `/deploy`.
+- **Wallet sign-in and one role per person**: the 1AM wallet is the account (one tap, auto-reconnect with retry, real sign-out). Each wallet picks patient or study team once; a wallet approved as a doctor on-chain always opens on the doctor screen. Role switching is hidden behind a demo mode (`?demo=1` or long-press the logo).
+- **Doctor identity check with Didit (optional)**: an ID + selfie check by [Didit](https://didit.me) during doctor sign-up. The verification API keeps only the outcome and `sha256(session, doctorKey)`, never ID data. Sandbox and offline mock modes for demos.
+- **Repo hygiene**: Apache-2.0 licence, CI, cross-platform asset copy, removed 49 stale compiled `.js` files that shadowed the TypeScript sources.
+
+## Known limits and roadmap
+
+Stated plainly so nobody has to discover them:
+
+- The circuit enforces one required diagnosis, one excluded diagnosis and one lab rule per trial, and a credential carries up to 4 diagnoses and 4 labs. Extra rules stay in the off-chain criteria document bound by `criteriaHash`.
+- Revoking an anonymous commitment is not supported yet. `revokeCredential` still revokes the encrypted card by id, but the ZK circuit relies on expiry (12 months). Next step: an accumulator-based non-revocation proof.
+- The patient's ZK key lives in browser storage. Clearing site data orphans attested cards until backup includes the key.
+- The verification API relays patient intake in plaintext while a request is pending, and the card encryption key is derived from the request code it also relays. It is a convenience relay, not part of the privacy guarantee; production should encrypt the card to a patient-held key.
+- Addresses below marked Wave 2 run the old contract on the pre-fork ledger; use the Wave 3 address.
+
+Next: non-revocation proofs, multi-rule criteria, a sponsor-funded enrollment escrow, and a pilot with one clinic and one recruiting site.
+
+## Who it is for
+
+Patient recruitment is the largest single cost and delay in clinical development. The buyer is the trial sponsor or CRO, who pays per verified eligible applicant; the patient and the doctor pay nothing. ZKLinic gives sponsors pre-verified candidates without taking on the liability of holding raw health data, which is the part that makes hospitals and regulators say no today.
 
 ---
 
-## Challenges I ran into
+## Deployed contract addresses
 
-- **Keeping clinical data off every server and still making it verifiable.** The credential is encrypted and stored only on the patient's device; the chain sees issuer validity, diagnosis *commitments* and eligibility booleans — never the underlying values. Designing which facts are public, which are committed, and which never leave the device shaped the whole contract.
-- **Midnight tooling moving under our feet.** Wallet/SDK sync behaved differently across indexer API versions (v3 vs v4), dust sync needs a reachable local proof server (without it, sync can sit on `dust=false` until it times out), and Midnight's own hosted Preprod indexer/RPC has since been retired in favour of Blockfrost — so the CLI's Preprod config now reads `BLOCKFROST_PROJECT_ID`.
-- **Running a ZK stack in the browser.** WASM ledger/runtime bundles, top-level `await`, Node polyfills (`Buffer`, `crypto`) and IndexedDB-backed private state all had to cooperate inside Vite and the [1AM](https://1am.xyz/) DApp Connector.
-- **Trusting the issuer, not just the patient.** A proof is only meaningful if a *real* physician signed the credential, so doctors go through registration, attestation (including an India NMC registry lookup and certificate OCR) and admin approval before they can issue anything.
-- **Making privacy feel simple.** Patients should never have to read a cryptography paper: the UI uses a health-card metaphor, an explicit "what is shared" disclosure step before any proof is created, and plain-language trial criteria (E11.9 → "Type 2 Diabetes").
-- **Free-tier hosting.** The demo backend sleeps when idle and has limited resources, which is why the app now surfaces API status and why local setup is documented step by step.
+| Network | Contract | Address (hex) |
+| --- | --- | --- |
+| Preview | Wave 2 (legacy) | `86b8c4ed80a2d6c4bc45a1ac134607afb1d1499e2a864a2f0241a2e1537a507e` |
+| Pre-production | Wave 2 (legacy) | `f4bf7e879850040a0521234ea05824943cd60d32b669d8cba142a823cb6e3aae` |
+| Pre-production | **Wave 3** (ledger v9) | `76099957e2d62de2587a4c0c7b6797715be6c5f9d03590a5443e39f27e2dfb55` |
 
----
-
-## Technologies I used
-
-| Layer | Stack |
-| --- | --- |
-| **Blockchain / ZK** | [Midnight Network](https://midnight.network), the **Compact** smart-contract language, Midnight JS SDK (`midnight-js-contracts`, indexer / proof / ZK-config providers), Midnight Wallet SDK (HD wallet, shielded / unshielded / dust), Midnight **proof server** (Docker) |
-| **Wallet** | [1AM](https://1am.xyz/) browser wallet via `@midnight-ntwrk/dapp-connector-api` |
-| **Frontend** | React 19, TypeScript, Vite (WASM + top-level-await plugins), React Router, Tailwind CSS, Framer Motion, styled-components, NeoPOP (`@cred/neopop-web`), Lucide icons, Tesseract.js (client-side OCR) |
-| **Backend** | Node.js, Restify, JSON-file persistence; WHO **ICD-11** API and ICD-10 code sets; India **NMC** doctor-registry lookup; optional Google **Gemini** assistant for form autofill |
-| **CLI** | Node.js + `tsx`, headless Midnight Wallet SDK, interactive role-based menus |
-| **Quality** | Vitest (unit), Playwright (E2E, desktop + mobile), TypeScript strict mode |
-| **Infra** | Docker (proof server), Render (API), Vercel (UI), Blockfrost (Preprod indexer/RPC) |
-
----
-
-## How we built it
-
-1. **Contract first.** A single Compact contract (`contract/src/zkclinic.compact`) holds the issuer registry, credential registry (with revocation and diagnosis commitments) and the trial lifecycle (`createTrial`, `recordEnrollment`, `closeTrial`). The compiled circuits and keys are committed so the app builds without the Compact compiler.
-2. **Off-chain trust layer.** The Verification API handles what shouldn't live on-chain: doctor attestation and review, credential-request codes, encrypted credential delivery, trial metadata/validation, and proof-ID bookkeeping.
-3. **Patient-first web app.** The UI keeps the credential on-device, evaluates eligibility locally against a trial's criteria, shows a boolean-only disclosure, and only then creates a proof ID. Doctor, admin and trial-manager tools live in separate tabs.
-4. **A CLI for every role.** The headless CLI exercises the whole protocol (deploy, join, issue, enroll) without a browser wallet — handy for demos and CI-style walkthroughs.
-5. **Test and polish.** Unit tests across all packages, Playwright smoke/mobile tests, and UX additions such as saved trials, a command palette and API status (see [UI features](#ui-features-no-contract-changes)).
-
-The [system architecture](#system-architecture) and [end-to-end user flow](#user-flow-end-to-end) below show how the pieces connect.
-
----
-
-## What we learned
-
-- **Privacy is a product problem as much as a cryptography problem.** The hardest part wasn't producing a proof — it was making it obvious to a patient exactly what leaves their device.
-- **Design the public/private split early.** Deciding what is a ledger value, a commitment, or device-only state determines every circuit and every screen.
-- **Pin and verify the whole toolchain.** Proof-server, ledger, SDK and indexer versions must line up; being able to read sync progress and fail loudly saved a lot of time.
-- **Off-chain services still need to be honest about being off-chain.** Free hosting sleeps, so the UI should say so instead of failing silently.
-- **Boolean-only disclosure is enough.** Recruiters need "eligible, criterion by criterion, signed by a licensed doctor" — nothing more.
-
----
-
-## What's next for ZKClinic
-
-- Move the credential-request and proof-bookkeeping services to always-on hosting (or fully on-chain/peer-to-peer) so the demo no longer depends on a sleeping free-tier backend.
-- Patient-controlled **reveal** and on-chain messaging so a trial manager can contact an eligible patient via proof ID without email or phone.
-- Credential **recovery** flows (encrypted backup/restore across devices) and proof expiry reminders.
-- More issuer types and registries beyond India NMC, plus richer lab-value and medication criteria.
-- A security review, mainnet readiness, and pilots with real trial sponsors and clinics.
-
----
-
-## Contents of this repository — technical reference
-
-The sections below document the contracts, services, wallets and scripts in detail.
-
----
-
-## UI features (no contract changes)
-
-Quality-of-life additions that live entirely in `zkclinic-ui` — they don't touch the Compact contract, the API, or any proof logic:
-
-- **Saved trials & deadline urgency** — star a trial in *Trial matching* to bookmark it on this device (localStorage only, never sent anywhere), filter with **Saved only**, and see a "Closes in 3d" badge plus a slots-filled progress bar on each trial card.
-- **Command palette** — press `Ctrl/⌘ + K` anywhere to jump between Patient / Doctor / Trial programs / Contract / Docs, toggle dark mode, or copy the joined contract address.
-- **API status pill** — the app header shows whether the Verification API is *online* or *waking up…* (free-tier hosting sleeps when idle).
-- **Click-to-fill trial manager** — pick a trial from your list ("Use this trial") instead of pasting a 64-character id, with a slots progress bar and one-click **Copy ID**.
-- **Copy buttons** — one-click copy for proof IDs and trial IDs.
-
----
-
-## Contracts deployed
-
-Use these 64-character hex registry addresses to **join** the same deployment from the CLI or the web UI (paste into “Connect contract” or press Enter when the CLI offers `ZKCLINIC_CONTRACT_ADDRESS`).
-
-
-| Network                                                              | Contract address (hex, 64 chars)                                   |
-| -------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| **Preview** (deployment 1)                                           | `86b8c4ed80a2d6c4bc45a1ac134607afb1d1499e2a864a2f0241a2e1537a507e` |
-| **Preview** (deployment 2)                                           | `9ab8ce9cbe435786a5877d8f9c50faaa3d4c9ab8652b72417720b8422831e4e3` |
-| **Pre-production (`preprod`)**                                       | `f4bf7e879850040a0521234ea05824943cd60d32b669d8cba142a823cb6e3aae` |
-
-
-To use your own registry, deploy a fresh one and set its address in env (below).
+The Wave 3 UI and CLI need a Wave 3 contract: the circuit set changed, so they cannot drive the legacy addresses.
 
 ---
 
@@ -165,7 +186,7 @@ Fund testnet addresses from the official faucets when using public networks:
 
 ## Quick start
 
-**Prerequisites:** Node.js **22+**, npm **10+**, `compact` on `PATH`, and a **proof server** at `http://127.0.0.1:6300` (or set `PROOF_SERVER_URL`) when the network expects local proving.
+**Prerequisites:** Node.js **22** (see `.nvmrc`; the verification API server does not start on Node 24), npm **10+**, the `compact` compiler 0.36.1 on `PATH` (Linux, macOS or WSL), and a **proof server** at `http://127.0.0.1:6300` (or set `PROOF_SERVER_URL`) when the network expects local proving.
 
 ```bash
 nvm use 22   # or equivalent
@@ -222,8 +243,7 @@ The CLI is an interactive menu driver: wallet → contract → role workflows. M
 | Script               | Network                                                                                           |
 | -------------------- | ------------------------------------------------------------------------------------------------- |
 | `npm run preview`    | Midnight **Preview** (indexer v3 URLs in `PreviewConfig`)                                         |
-| `npm run preprod`    | Midnight **Pre-production** (set `BLOCKFROST_PROJECT_ID` — Preprod is served via Blockfrost; see `PreprodConfig` in `zkclinic-cli/src/config.ts`) |
-| `npm run deploy`     | Headless deploy: `NETWORK=preprod\|preview WALLET_MNEMONIC=… npm run deploy -w zkclinic-cli` prints the new contract address |
+| `npm run preprod`    | Midnight **Pre-production** (indexer **v4**; see `PreprodConfig` in `zkclinic-cli/src/config.ts`) |
 | `npm run standalone` | Local undeployed stack (ports `9944` / `8088` / `6300`)                                           |
 
 
@@ -232,10 +252,10 @@ The CLI is an interactive menu driver: wallet → contract → role workflows. M
 1. **Wallet** — Generate, import mnemonic, or use `WALLET_MNEMONIC` / `WALLET_MNEMONIC_DOCTOR` / `WALLET_MNEMONIC_ADMIN` / `WALLET_MNEMONIC_TRIAL` / `WALLET_MNEMONIC_PATIENT` from `.env`. Wait until sync completes; fund from the faucet if balances are zero.
 2. **Contract** — Deploy new, or **join existing** by pasting the 64-hex address (Enter defaults to `ZKCLINIC_CONTRACT_ADDRESS` if set).
 3. **Role menu**
-  - **Doctor** — Issuer request, unified API + on-chain registration, fulfill patient request by **request code**, register or revoke credentials on-chain.
-  - **Patient** — Create **credential request** via Verification API (receives an 8-character code to share with the doctor).
+  - **Doctor** — Issuer request, unified API + on-chain registration, fulfill patient request by **request code**, register or revoke credentials on-chain, **attest ZK credential** (commitment on-chain, attributes JSON for the patient).
+  - **Patient** — Create **credential request**, **show ZK public key**, **prove eligibility for a trial** (prints the nullifier = proof ID).
   - **Admin** — Approve or revoke issuers, transfer admin.
-  - **Trial manager** — Create, enroll, close trials.
+  - **Trial manager** — Create trial and publish on-chain criteria, enroll a proof ID, close trials.
   - **Utilities** — Random license hash, demo copy-paste sheet, **switch contract**, **view on-chain state** (indexer snapshot for the joined registry).
 
 Example excerpt: after joining, **Utilities → View on-chain state** prints issuers, credentials, diagnosis commitment rows, and trials for that contract. **Doctor → Fulfill patient request** consumes the patient’s code, appends diagnosis commitments, registers the credential on-chain, and returns ciphertext the patient can decrypt with their code.
@@ -288,7 +308,7 @@ flowchart TB
 | `[zkclinic-verification-api/](zkclinic-verification-api/)` | Issuer attestation and verification, credential request lifecycle, trial metadata and validation endpoints consumed by UI and CLI. |
 
 
-**On-chain (Compact)** — `contract/src/zkclinic.compact`: issuer requests and approvals, credential registration and revocation, trial lifecycle (`createTrial`, `recordEnrollment`, `closeTrial`), and admin transfer.
+**On-chain (Compact)** — `contract/src/zkclinic.compact`: issuer registry, credential registration and revocation, credential commitments (`issueCredentialCommitment`), trial lifecycle (`createTrial`, `publishTrialCriteria`, `closeTrial`), private eligibility (`proveEligibility`), proof-bound enrollment (`recordEnrollment`), and admin transfer.
 
 ---
 
@@ -312,10 +332,11 @@ sequenceDiagram
   P->>D: Share code (out of band)
   D->>API: Resolve request, attach clinical payload
   D->>L: registerCredential + diagnosis commitments
+  D->>L: issueCredentialCommitment (ZK attestation)
   D->>API: Deliver encrypted credential bundle
   P->>API: Fetch ciphertext, decrypt locally
 
-  Note over P,L: Trials — manager publishes criteria hash on-chain. Patient evaluates locally and consents before sharing boolean result or proof id.
+  Note over P,L: Trials — manager publishes criteria on-chain. Patient proves eligibility in zero knowledge; only a per-trial nullifier is public.
 ```
 
 
@@ -324,9 +345,9 @@ sequenceDiagram
 
 1. **Issuer trust** — Doctor requests inclusion; admin approves with attestation data anchored on-chain.
 2. **Credentials** — Patient gets a request code; doctor fulfills and registers on-chain; patient holds encrypted material locally.
-3. **Trials** — Manager creates trials with hashed criteria; enrollment and capacity are enforced on-chain; patient UX combines indexer state with API-backed human-readable criteria where configured.
+3. **Trials** — Manager creates trials and publishes machine-checkable criteria; patients prove eligibility with `proveEligibility`; enrollment is only possible for a proven pseudonym and capacity is enforced on-chain.
 
-**Preprod quick alignment:** Join contract `f4bf7e879850040a0521234ea05824943cd60d32b669d8cba142a823cb6e3aae`, set `VITE_VERIFICATION_API_URL` / `VERIFICATION_API_URL` to `https://zklinic-verification-api.onrender.com`, use **[1AM](https://1am.xyz/)** on preprod in the browser, and keep a local **proof server** reachable at `PROOF_SERVER_URL` (for example `http://127.0.0.1:6300`) so wallet/SDK “dust” sync can finish — without it, CLI sync may sit on `dust=false` until timeout.
+**Preprod quick alignment:** Join your Wave 3 contract address (table above), set `VITE_VERIFICATION_API_URL` / `VERIFICATION_API_URL` to `https://zklinic-verification-api.onrender.com`, use **[1AM](https://1am.xyz/)** on preprod in the browser, and keep a local **proof server** reachable at `PROOF_SERVER_URL` (for example `http://127.0.0.1:6300`) so wallet/SDK “dust” sync can finish — without it, CLI sync may sit on `dust=false` until timeout.
 
 ---
 
@@ -355,6 +376,7 @@ npm run test:e2e
 - **UI contract pre-fill:** `VITE_CONTRACT_ADDRESS`; optional `VITE_AUTO_JOIN_CONTRACT=true` for a single automatic join attempt.  
 - **Admin-only UI actions:** align `VITE_ZKCLINIC_ADMIN_TOKEN` with `ZKCLINIC_ADMIN_TOKEN` on the verification API where those endpoints are used.  
 - **Persistence:** verification API stores state under `data/` by default; override with `ZKCLINIC_PERSISTENCE_PATH` if needed.
+- **Didit identity check for doctors (optional):** set `DIDIT_API_KEY` and `DIDIT_WORKFLOW_ID` on the verification API. With a sandbox-mode Didit application, also set `DIDIT_SANDBOX_SCENARIO=approve` for free, simulated sessions. `DIDIT_MOCK=1` runs the same flow offline and always approves. ZKLinic stores only the result and a hash of (session, doctor key), never ID data.
 
 ---
 
@@ -363,8 +385,6 @@ npm run test:e2e
 
 | Resource                                 | URL                                                                                                                                  |
 | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| Demo video                               | [https://youtu.be/RYE_c_51CQw](https://youtu.be/RYE_c_51CQw)                                                                         |
-| Pitch deck                               | [zklinic-pptx.pdf (Google Drive)](https://drive.google.com/file/d/1Y8k4u9DnwWxGKQ2y9fn9XEg4be3FCf4J/view?usp=sharing) |
 | ZKClinic Verification API (preprod demo) | [https://zklinic-verification-api.onrender.com](https://zklinic-verification-api.onrender.com)                                       |
 | Midnight docs                            | [https://docs.midnight.network](https://docs.midnight.network)                                                                       |
 | Compact language reference               | [https://docs.midnight.network/develop/reference/compact/lang-ref](https://docs.midnight.network/develop/reference/compact/lang-ref) |
@@ -373,4 +393,8 @@ npm run test:e2e
 | Preview faucet                           | [https://faucet.preview.midnight.network](https://faucet.preview.midnight.network)                                                   |
 | Pre-production faucet                    | [https://faucet.preprod.midnight.network](https://faucet.preprod.midnight.network)                                                   |
 
+---
 
+## License
+
+[Apache License 2.0](LICENSE). Built for the Midnight Buildathon; uses the Midnight SDKs and Compact toolchain by the Midnight Foundation and Shielded Technologies.

@@ -13,7 +13,7 @@ export function LandingPage() {
   const navigate = useNavigate();
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-background" data-testid="landing-page">
+    <div className="flex h-[100dvh] flex-col overflow-hidden bg-background" data-testid="landing-page">
       <MarketingNav />
 
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -33,7 +33,7 @@ export function LandingPage() {
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.5 }}
-              className="mb-6 inline-flex items-center gap-1.5 rounded-full border border-border bg-background px-4 py-1.5 font-body text-sm text-muted-foreground"
+              className="mb-6 hidden items-center gap-1.5 rounded-full border border-border bg-background px-4 py-1.5 font-body text-sm text-muted-foreground sm:inline-flex"
             >
               Most trials miss recruitment deadlines—the patients were there all along
             </motion.div>
@@ -42,7 +42,7 @@ export function LandingPage() {
               initial={{ opacity: 0, y: 16 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.6, delay: 0.1 }}
-              className="max-w-xl text-center font-display text-5xl leading-[0.95] tracking-tight text-foreground md:text-6xl lg:text-[5rem]"
+              className="max-w-xl text-center font-display text-4xl leading-[0.95] tracking-tight text-foreground sm:text-5xl md:text-6xl lg:text-[5rem]"
             >
               Get found for the trial.{" "}
               <span className="italic text-foreground">Keep</span> your records.
@@ -63,15 +63,24 @@ export function LandingPage() {
               initial={{ opacity: 0, y: 16 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.6, delay: 0.3 }}
-              className="mt-5 flex items-center gap-3"
+              className="mt-5 flex flex-wrap items-center justify-center gap-3"
             >
               <Button
                 type="button"
-                className="rounded-full px-6 py-5 text-sm font-medium font-body"
+                className="rounded-full px-7 py-6 text-base font-medium font-body"
+                onClick={() => void navigate("/demo")}
+                data-testid="hero-try-demo"
+              >
+                Try the 1-minute demo
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                className="rounded-full bg-background px-6 py-6 text-base font-medium font-body"
                 onClick={() => void navigate("/app/patient")}
                 data-testid="hero-launch-app"
               >
-                Launch app
+                Open the app
               </Button>
               <Button
                 type="button"

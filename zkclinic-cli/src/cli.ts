@@ -23,6 +23,10 @@ import {
   createTrialOnChain,
   closeTrialOnChain,
   recordEnrollmentOnChain,
+  getZkPublicKeyHex,
+  issueCredentialCommitmentOnChain,
+  publishTrialCriteriaOnChain,
+  proveEligibilityOnChain,
   transferAdminOnChain,
   getDoctorCoinPublicKeyHex,
   getPendingLicenseHash,
@@ -50,6 +54,13 @@ import {
   DEMO_MEDICAL_COUNCIL,
   DEMO_IMR_RECORD_TEXT
 } from "./demo-values.js";
+import { randomBytes } from "node:crypto";
+import {
+  attributesFromCredential,
+  attributesToJson,
+  type CriteriaLike,
+  type HealthAttributesJson
+} from "zkclinic-contract";
 import { type Config, PreviewConfig, StandaloneConfig } from "./config.js";
 import { type DeployedZKClinicContract, type ZKClinicProviders } from "./common-types.js";
 
@@ -88,7 +99,7 @@ Selection: `;
 const ROLE_QUESTION = `
 ══ Role / workflow (pick what you are doing; all prompts accept Enter for demo defaults) ══
   1. Doctor — issuer request, API registration, credentials, fulfill patient request
-  2. Patient — credential request via Verification API (no chain tx)
+  2. Patient — credential request, ZK public key, prove trial eligibility
   3. Admin — approve / revoke issuer, transfer admin
   4. Trial manager — create / enroll / close trial
   5. Utilities — random hash, demo sheet, switch contract
@@ -102,13 +113,16 @@ const DOCTOR_MENU = `
   3. Fulfill patient request (request code; Enter = last code from this session + demo ICD-10)
   4. Register credential on-chain only (Enter = demo credential id)
   5. Revoke credential on-chain (Enter = demo credential id)
+  6. Attest ZK credential (commitment on-chain; Enter = this session's ZK key + demo attributes)
   0. Back
 Selection: `;
 
 const PATIENT_MENU = `
-── Patient (Verification API) ──
+── Patient ──
   1. Create credential request (prints request code; Enter = demo patient label)
   2. Show last request code from this session
+  3. Show my ZK public key (give this to your doctor)
+  4. Prove eligibility for a trial (ZK proof; Enter = last attested attributes + last trial)
   0. Back
 Selection: `;
 
@@ -122,8 +136,8 @@ Selection: `;
 
 const TRIAL_MENU = `
 ── Trial manager ──
-  1. Create trial (Enter = demo trial id, slots, deadline, criteria)
-  2. Record enrollment (Enter = last trial id from session)
+  1. Create trial + publish on-chain criteria (Enter = demo values)
+  2. Record enrollment (trial id + proof ID; Enter = last from session)
   3. Close trial (Enter = last trial id)
   0. Back
 Selection: `;
@@ -141,6 +155,8 @@ type CliSession = {
   lastRequestCode: string;
   lastTrialId: string;
   lastDoctorPubKeyHex: string;
+  lastAttributesJson: string;
+  lastProofId: string;
 };
 
 const defaultVerificationApiUrl = () => process.env.VERIFICATION_API_URL ?? "http://localhost:4100";
@@ -299,7 +315,8 @@ async function runDoctorMenu(
   rli: Interface,
   contract: DeployedZKClinicContract,
   activeWallet: NonNullable<Awaited<ReturnType<typeof pickWallet>>>,
-  session: CliSession
+  session: CliSession,
+  providers: ZKClinicProviders
 ): Promise<void> {
   const choice = (await rli.question(DOCTOR_MENU)).trim();
   const verificationApiUrl = defaultVerificationApiUrl();
@@ -465,6 +482,42 @@ async function runDoctorMenu(
       console.log("Credential revoked on-chain.");
       break;
     }
+    case "6": {
+      const pk = hex64(
+        await promptWithDefault(rli, "Patient ZK public key (64 hex)", await getZkPublicKeyHex(providers, contract))
+      );
+      if (!isHex64(pk)) {
+        console.log("Patient ZK public key must be 64 hex characters.");
+        break;
+      }
+      const ageYears = Number(await promptWithDefault(rli, "Patient age (years)", "45"));
+      const icd10Codes = (await promptWithDefault(rli, "ICD-10 codes (comma separated, first 4 attested)", DEMO_ICD10_LINE))
+        .split(",")
+        .map((c) => c.trim())
+        .filter(Boolean);
+      const testName = await promptWithDefault(rli, "Lab test name (empty = none)", "HbA1c");
+      const value = Number(await promptWithDefault(rli, "Lab value", "8.2"));
+      if (!Number.isFinite(ageYears) || (testName && !Number.isFinite(value))) {
+        console.log("Age and lab value must be numbers.");
+        break;
+      }
+      const attributes = attributesFromCredential(
+        {
+          ageYears,
+          icd10Codes,
+          labResults: testName ? [{ testName, value }] : [],
+          expiresAt: Date.now() + 365 * 86400000
+        },
+        randomBytes(32)
+      );
+      const commitment = await issueCredentialCommitmentOnChain(contract, pk, attributes);
+      session.lastAttributesJson = JSON.stringify(attributesToJson(attributes));
+      console.log(`\nCommitment on-chain: ${commitment}`);
+      console.log("--- ZK attributes JSON — send privately to the patient (never posted on-chain) ---");
+      console.log(session.lastAttributesJson);
+      console.log("----------------------------------------------------------------------------------\n");
+      break;
+    }
     case "0":
       break;
     default:
@@ -472,7 +525,12 @@ async function runDoctorMenu(
   }
 }
 
-async function runPatientMenu(rli: Interface, session: CliSession): Promise<void> {
+async function runPatientMenu(
+  rli: Interface,
+  session: CliSession,
+  contract: DeployedZKClinicContract,
+  providers: ZKClinicProviders
+): Promise<void> {
   const choice = (await rli.question(PATIENT_MENU)).trim();
   const verificationApiUrl = defaultVerificationApiUrl();
 
@@ -509,6 +567,30 @@ async function runPatientMenu(rli: Interface, session: CliSession): Promise<void
       } else {
         console.log("No request code in this session yet.");
       }
+      break;
+    }
+    case "3": {
+      console.log(`ZK public key: ${await getZkPublicKeyHex(providers, contract)}`);
+      break;
+    }
+    case "4": {
+      const raw = await promptWithDefault(rli, "ZK attributes JSON from your doctor", session.lastAttributesJson);
+      let attributes: HealthAttributesJson;
+      try {
+        attributes = JSON.parse(raw) as HealthAttributesJson;
+      } catch {
+        console.log("Attributes must be the JSON printed by Doctor → Attest ZK credential.");
+        break;
+      }
+      const tid = hex64(await promptWithDefault(rli, "Trial id (64 hex)", session.lastTrialId || DEMO_TRIAL_ID));
+      if (!isHex64(tid)) {
+        console.log("Invalid trial id.");
+        break;
+      }
+      console.log("Generating zero-knowledge proof (attributes stay on this machine)...");
+      session.lastProofId = await proveEligibilityOnChain(providers, contract, tid, attributes);
+      session.lastTrialId = tid;
+      console.log(`\nEligible. Proof ID (per-trial pseudonym) — share with the trial manager:\n${session.lastProofId}\n`);
       break;
     }
     case "0":
@@ -627,9 +709,32 @@ async function runTrialMenu(
       }
       const bpsStr = await promptWithDefault(rli, "Eligibility threshold basis points (7500 = 75%)", "7500");
       const eligibilityThresholdBps = BigInt(bpsStr || "7500");
+      const criteria: CriteriaLike = {
+        ageMin: Number(await promptWithDefault(rli, "Minimum age", "18")),
+        ageMax: Number(await promptWithDefault(rli, "Maximum age", "65")),
+        inclusionIcd10: [await promptWithDefault(rli, "Required ICD-10 code", "E11.9")],
+        exclusionIcd10: [await promptWithDefault(rli, "Excluded ICD-10 code (empty = none)", "")]
+      };
+      const labName = await promptWithDefault(rli, "Lab rule test name (empty = none)", "HbA1c");
+      if (labName) {
+        const op = await promptWithDefault(rli, "Lab rule operator (=, <, >, <=, >=)", ">=");
+        if (!["=", "<", ">", "<=", ">="].includes(op)) {
+          console.log("Operator must be one of =, <, >, <=, >=.");
+          break;
+        }
+        criteria.labCriteria = [
+          {
+            testName: labName,
+            operator: op as NonNullable<CriteriaLike["labCriteria"]>[number]["operator"],
+            threshold: Number(await promptWithDefault(rli, "Lab rule threshold", "7.5"))
+          }
+        ];
+      }
       await createTrialOnChain(contract, idHex, slots, deadlineMs, crit, eligibilityThresholdBps);
       session.lastTrialId = idHex;
       console.log(`Trial created: id=${idHex}`);
+      await publishTrialCriteriaOnChain(contract, idHex, criteria);
+      console.log("Machine-checkable criteria published on-chain (immutable).");
       break;
     }
     case "2": {
@@ -638,9 +743,14 @@ async function runTrialMenu(
         console.log("Invalid trial id.");
         break;
       }
-      await recordEnrollmentOnChain(contract, tid);
+      const proofId = hex64(await promptWithDefault(rli, "Proof ID from patient (64 hex)", session.lastProofId));
+      if (!isHex64(proofId)) {
+        console.log("Proof ID must be 64 hex characters (Patient → Prove eligibility prints it).");
+        break;
+      }
+      await recordEnrollmentOnChain(contract, tid, proofId);
       session.lastTrialId = tid;
-      console.log("Enrollment recorded on-chain.");
+      console.log("Enrollment recorded on-chain (bound to the eligibility proof).");
       break;
     }
     case "3": {
@@ -733,7 +843,9 @@ export async function runCli(config: Config = new PreviewConfig()): Promise<void
   const session: CliSession = {
     lastRequestCode: "",
     lastTrialId: "",
-    lastDoctorPubKeyHex: ""
+    lastDoctorPubKeyHex: "",
+    lastAttributesJson: "",
+    lastProofId: ""
   };
 
   try {
@@ -749,8 +861,8 @@ export async function runCli(config: Config = new PreviewConfig()): Promise<void
       const role = (await rli.question(ROLE_QUESTION)).trim();
       try {
         if (role === "0") return;
-        if (role === "1") await runDoctorMenu(rli, holders.contract, activeWallet, session);
-        else if (role === "2") await runPatientMenu(rli, session);
+        if (role === "1") await runDoctorMenu(rli, holders.contract, activeWallet, session, providers);
+        else if (role === "2") await runPatientMenu(rli, session, holders.contract, providers);
         else if (role === "3")
           await runAdminMenu(rli, holders.contract, providers, holders.contractAddress, session);
         else if (role === "4") await runTrialMenu(rli, holders.contract, session);

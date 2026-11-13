@@ -1,4 +1,9 @@
-import restify from "restify";
+import { createRequire } from "node:module";
+import type Restify from "restify";
+
+// Loaded lazily: restify (via spdy) throws at import time on Node 24, which broke every test that
+// only needs the pure helpers in this file. The server itself still needs Node 22 (see .nvmrc).
+const loadRestify = (): typeof Restify => createRequire(import.meta.url)("restify");
 import { createHash, randomBytes as nodeRandomBytes } from "node:crypto";
 import {
   createDebouncedPersist,
@@ -10,6 +15,7 @@ import {
 import { codeToIcd11Text, textToIcd11Pipeline, whoLookupMmsCode } from "./icd11.js";
 import { verifyDoctorNmc } from "./nmcDoctorVerification.js";
 import { geminiGenerateJson } from "./geminiAssistant.js";
+import { createDidit } from "./didit.js";
 import type { IssuerRegistration, IssuerRegistrationStatus } from "./issuerRegistrationTypes.js";
 
 const ICD10_API = "https://clinicaltables.nlm.nih.gov/api/icd10cm/v3/search";
@@ -135,6 +141,7 @@ export type ZkClinicApiDependencies = {
   now?: () => number;
   randomBytes?: (size: number) => Uint8Array | Buffer;
   resolveIcd10Exact?: (code: string) => Promise<{ code: string; name: string } | null>;
+  didit?: ReturnType<typeof createDidit>;
 };
 
 export function stableStringify(value: unknown): string {
@@ -183,7 +190,9 @@ export function createZkClinicServer(deps: ZkClinicApiDependencies = {}) {
   const now = deps.now ?? (() => Date.now());
   const randomBytes = deps.randomBytes ?? nodeRandomBytes;
   const resolveIcd10Exact = deps.resolveIcd10Exact ?? defaultResolveIcd10Exact;
+  const didit = deps.didit ?? createDidit();
 
+  const restify = loadRestify();
   const server = restify.createServer({ name: "zkclinic-verification-api" });
 
   /**
@@ -227,6 +236,7 @@ export function createZkClinicServer(deps: ZkClinicApiDependencies = {}) {
     return next();
   });
 
+  server.use(restify.plugins.queryParser());
   server.use(restify.plugins.bodyParser());
 
   const credentialRequests = new Map<string, CredentialRequest>();
@@ -494,7 +504,8 @@ export function createZkClinicServer(deps: ZkClinicApiDependencies = {}) {
       const base: IssuerRegistration = {
         ...reg,
         verificationPayloadHash: nmc.verificationPayloadHash,
-        reasons: nmc.reasons,
+        // Keep reasons set at submission (e.g. didit_identity_verified).
+        reasons: [...nmc.reasons, ...(reg.reasons ?? [])],
         confidence: nmc.confidence,
         updatedAt: t
       };
@@ -581,6 +592,45 @@ Never invent precise ICD codes unless reasonably inferable; use null for unknown
     return next();
   });
 
+  // ── Didit identity check for doctors (optional; see didit.ts) ──
+  server.get("/didit/config", (_req, res, next) => {
+    res.send({ mode: didit.mode });
+    return next();
+  });
+
+  server.post("/didit/session", async (req, res) => {
+    const body = req.body as { doctorPubKeyHex?: string; callback?: string };
+    const doc = normDocKey(body.doctorPubKeyHex?.trim() ?? "");
+    let callback: URL | null = null;
+    try {
+      callback = new URL(body.callback ?? "");
+    } catch {
+      /* handled below */
+    }
+    if (!/^[0-9a-f]{64}$/.test(doc) || !callback || !/^https?:$/.test(callback.protocol)) {
+      res.send(400, { error: "doctorPubKeyHex (64 hex) and an http(s) callback URL are required" });
+      return;
+    }
+    try {
+      res.send(200, await didit.createSession(doc, callback.toString()));
+    } catch (e) {
+      res.send(didit.mode === "off" ? 503 : 502, { error: e instanceof Error ? e.message : String(e) });
+    }
+  });
+
+  server.get("/didit/session/:sessionId", async (req, res) => {
+    const doc = normDocKey(((req.query as { doctorPubKeyHex?: string }).doctorPubKeyHex ?? "").trim());
+    if (!/^[0-9a-f]{64}$/.test(doc)) {
+      res.send(400, { error: "doctorPubKeyHex query parameter (64 hex) is required" });
+      return;
+    }
+    try {
+      res.send(200, await didit.getResult(String(req.params.sessionId), doc));
+    } catch (e) {
+      res.send(didit.mode === "off" ? 503 : 400, { error: e instanceof Error ? e.message : String(e) });
+    }
+  });
+
   server.post("/issuer-registration", async (req, res) => {
     const body = req.body as {
       doctorPubKeyHex?: string;
@@ -591,6 +641,7 @@ Never invent precise ICD codes unless reasonably inferable; use null for unknown
       certificateOcrText?: string;
       ocrNameHint?: string;
       ocrSmcHint?: string;
+      diditSessionId?: string;
     };
     const docRaw = body.doctorPubKeyHex?.trim();
     const doctorId = body.doctorId?.trim();
@@ -619,8 +670,25 @@ Never invent precise ICD codes unless reasonably inferable; use null for unknown
         certificateOcrText: body.certificateOcrText
       });
     }
+    // An optional Didit check only adds evidence; a failed or pending one never blocks registration.
+    let identityAttestationHash: string | undefined;
+    if (body.diditSessionId?.trim() && didit.mode !== "off") {
+      try {
+        identityAttestationHash = (await didit.getResult(body.diditSessionId.trim(), doc)).attestationHash;
+      } catch {
+        /* ignore: registration proceeds on the medical ID alone */
+      }
+    }
+    const identityReasons = identityAttestationHash ? ["didit_identity_verified"] : [];
+
     const existing = findIssuerRegistration(doc, lic);
     if (existing && existing.status !== "rejected") {
+      if (identityAttestationHash && !existing.identityAttestationHash) {
+        existing.identityAttestationHash = identityAttestationHash;
+        existing.reasons = [...(existing.reasons ?? []), ...identityReasons];
+        existing.updatedAt = now();
+        persistStores();
+      }
       res.send(200, {
         registrationId: existing.registrationId,
         licenseHash: lic,
@@ -655,9 +723,10 @@ Never invent precise ICD codes unless reasonably inferable; use null for unknown
           certificateOcrText: certTrim,
           ocrNameHint: body.ocrNameHint?.trim() || undefined,
           ocrSmcHint: body.ocrSmcHint?.trim() || undefined,
+          identityAttestationHash,
           status: "api_verified",
           verificationPayloadHash: nmc.verificationPayloadHash,
-          reasons: ["mock_imr_excerpt_and_pdf_receipt_verified", ...nmc.reasons],
+          reasons: ["mock_imr_excerpt_and_pdf_receipt_verified", ...nmc.reasons, ...identityReasons],
           confidence: nmc.confidence,
           createdAt: t,
           updatedAt: t
@@ -688,6 +757,8 @@ Never invent precise ICD codes unless reasonably inferable; use null for unknown
       certificateOcrText: certTrim,
       ocrNameHint: body.ocrNameHint?.trim() || undefined,
       ocrSmcHint: body.ocrSmcHint?.trim() || undefined,
+      identityAttestationHash,
+      reasons: identityReasons.length ? identityReasons : undefined,
       status: "pending_verification",
       createdAt: t,
       updatedAt: t

@@ -1,0 +1,262 @@
+/* Guided demo: one step per screen, large type, one big button in thumb reach. Uses the app tokens. */
+
+.gd {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  background: var(--zk-bg);
+  color: var(--zk-ink);
+  font-family: var(--zk-font);
+  font-size: 1.1875rem;
+  line-height: 1.5;
+}
+
+.gd-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+}
+
+.gd-brand {
+  font-weight: 700;
+  font-size: 1.25rem;
+  color: var(--zk-green-dark);
+  text-decoration: none;
+  padding: 0.5rem 0;
+}
+
+.gd-progress {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 1rem;
+  color: var(--zk-muted);
+}
+
+.gd-bar {
+  display: flex;
+  gap: 4px;
+}
+
+.gd-bar i {
+  width: 1.5rem;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--zk-border-strong);
+}
+
+.gd-bar i[data-on="true"] {
+  background: var(--zk-green);
+}
+
+.gd-main {
+  flex: 1;
+  width: 100%;
+  max-width: 32rem;
+  margin: 0 auto;
+  padding: 0.5rem 1.25rem 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.75rem;
+}
+
+.gd-step h1 {
+  margin: 0 0 0.75rem;
+  font-size: 2rem;
+  line-height: 1.15;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+  outline: none;
+}
+
+.gd-step h1.gd-yes {
+  color: var(--zk-green-dark);
+}
+
+.gd-step p {
+  margin: 0 0 1rem;
+  max-width: 34ch;
+}
+
+.gd-card {
+  margin: 1.25rem 0;
+  background: var(--zk-surface);
+  border: 1px solid var(--zk-border-strong);
+  border-radius: var(--zk-radius);
+}
+
+.gd-card > div {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+  padding: 0.9rem 1.1rem;
+}
+
+.gd-card > div + div {
+  border-top: 1px solid var(--zk-border);
+}
+
+.gd-card dt {
+  color: var(--zk-muted);
+  font-size: 1rem;
+}
+
+.gd-card dd {
+  margin: 0;
+  font-weight: 600;
+  text-align: right;
+}
+
+.gd-go,
+.gd-alt {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 4rem;
+  padding: 0.75rem 1.25rem;
+  border-radius: var(--zk-radius);
+  font: inherit;
+  font-weight: 700;
+  text-align: center;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.gd-go {
+  font-size: 1.3125rem;
+  color: #fff;
+  background: var(--zk-green-dark);
+  border: 0;
+}
+
+.gd-go:hover {
+  background: var(--zk-green);
+}
+
+.gd-go:disabled {
+  opacity: 0.75;
+  cursor: progress;
+}
+
+.gd-actions {
+  display: grid;
+  gap: 0.75rem;
+}
+
+/* Phones: the action stays pinned in thumb reach, like a native app step screen. */
+@media (max-width: 899px) {
+  .gd-main {
+    padding-bottom: 11rem;
+  }
+
+  .gd-actions {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 10;
+    padding: 0.75rem 1.25rem calc(0.75rem + env(safe-area-inset-bottom));
+    background: var(--zk-bg);
+    border-top: 1px solid var(--zk-border-strong);
+  }
+}
+
+.gd-alt {
+  font-weight: 600;
+  font-size: 1.0625rem;
+  color: var(--zk-ink);
+  background: transparent;
+  border: 2px solid var(--zk-border-strong);
+}
+
+.gd-go:focus-visible,
+.gd-alt:focus-visible,
+.gd-brand:focus-visible {
+  outline: 3px solid var(--zk-ink);
+  outline-offset: 3px;
+}
+
+/* The signature element: private on one side, public on the other. */
+.gd-ledger {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.gd-ledger h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.gd-ledger ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.35rem;
+  font-size: 1.0625rem;
+}
+
+.gd-private,
+.gd-public {
+  padding: 1rem 1.1rem;
+  border-radius: var(--zk-radius);
+}
+
+.gd-private {
+  background: var(--zk-green-soft);
+  border: 1px solid var(--zk-green);
+}
+
+.gd-public {
+  background: var(--zk-surface);
+  border: 1px dashed var(--zk-border-strong);
+}
+
+.gd-public code {
+  font-family: var(--zk-mono);
+  font-size: 0.9375rem;
+  white-space: nowrap;
+}
+
+.gd-empty {
+  color: var(--zk-muted);
+}
+
+.gd-note {
+  margin: 0.25rem 0 0;
+  font-size: 0.9375rem;
+  color: var(--zk-muted);
+}
+
+.gd-note a {
+  color: inherit;
+}
+
+@media (min-width: 900px) {
+  .gd-main {
+    max-width: 62rem;
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 4rem;
+    padding-top: 3rem;
+  }
+
+  .gd-step {
+    flex: 1 1 0;
+  }
+
+  .gd-step h1 {
+    font-size: 2.75rem;
+  }
+
+  .gd-ledger {
+    flex: 0 0 22rem;
+  }
+}

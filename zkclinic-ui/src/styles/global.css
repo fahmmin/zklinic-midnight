@@ -1406,307 +1406,328 @@ select.zk-input {
   border: 1px solid rgba(107, 124, 58, 0.28);
 }
 
-/* --- Trial browse: saved trials, deadline badges, slots meter --- */
-.zk-trial-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-.zk-star {
-  flex: none;
-  border: 1px solid var(--zk-border-strong);
-  background: var(--zk-surface);
-  color: var(--zk-muted);
-  border-radius: var(--zk-radius-sm);
-  width: 36px;
-  height: 36px;
-  font-size: 1.125rem;
-  line-height: 1;
-  cursor: pointer;
-  transition: color 0.15s, border-color 0.15s, background 0.15s;
-}
-.zk-star:hover,
-.zk-star:focus-visible {
-  color: var(--zk-green-dark);
-  border-color: var(--zk-green);
-}
-.zk-star[aria-pressed="true"] {
-  color: var(--zk-green);
-  background: var(--zk-green-soft);
-  border-color: var(--zk-green);
-}
-.zk-trial-meta {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 12px;
-  margin-top: 0.5rem;
-}
-.zk-badge {
-  display: inline-block;
-  padding: 2px 10px;
-  border-radius: 999px;
-  border: 1px solid var(--zk-border-strong);
-  font-size: 0.75rem;
-  font-weight: 600;
-  letter-spacing: 0.01em;
-}
-.zk-badge--ok {
-  background: var(--zk-green-soft);
-  color: var(--zk-green-dark);
-}
-.zk-badge--soon {
-  background: #fff4e0;
-  color: #8a5300;
-  border-color: #e8c27a;
-}
-.zk-badge--closed {
-  background: var(--zk-danger-soft);
-  color: var(--zk-danger);
-}
-:root[data-theme="dark"] .zk-badge--ok {
-  color: #c9d8a4;
-}
-:root[data-theme="dark"] .zk-badge--soon {
-  background: #3a2c10;
-  color: #f0c36b;
-  border-color: #6b4f1a;
-}
-.zk-meter {
-  flex: 1;
-  min-width: 120px;
-  max-width: 240px;
-  height: 8px;
-  border-radius: 999px;
-  background: var(--zk-green-mist);
-  overflow: hidden;
-}
-.zk-meter-fill {
-  height: 100%;
-  background: var(--zk-green);
-  transition: width 0.3s ease;
+
+/* ---------------------------------------------------------------------------
+   Readability and phone pass. Larger type and tap targets everywhere; on
+   phones the role tabs become a fixed bottom bar and rows stack.
+   --------------------------------------------------------------------------- */
+
+.zk-app {
+  font-size: 1.0625rem;
 }
 
-/* --- Command palette (Ctrl/⌘ + K) --- */
-.zk-palette-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 1000;
+.zk-app .zk-btn,
+.zk-app .zk-input,
+.zk-app select.zk-input {
+  min-height: 48px;
+  font-size: 1rem; /* 16px+ stops iOS zooming into focused fields */
+}
+
+.zk-app .zk-btn--primary {
+  min-height: 52px;
+  font-size: 1.0625rem;
+}
+
+.zk-app .zk-lead,
+.zk-app .zk-msg,
+.zk-app .zk-msg-muted,
+.zk-app .zk-list {
+  font-size: 1rem;
+  line-height: 1.55;
+}
+
+.zk-app .zk-msg-muted[style] {
+  font-size: 0.9375rem !important; /* inline 13px hints were too small to read */
+}
+
+.zk-app label {
+  font-size: 1rem;
+}
+
+.zk-app :focus-visible {
+  outline: 3px solid var(--zk-ink);
+  outline-offset: 2px;
+}
+
+.zk-demo-link {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: center;
-  padding: 12vh 16px 16px;
-  background: rgba(10, 12, 8, 0.45);
-  backdrop-filter: blur(3px);
-}
-.zk-palette {
-  width: 100%;
-  max-width: 560px;
-  background: var(--zk-surface);
-  color: var(--zk-ink);
-  border: 1px solid var(--zk-border-strong);
+  min-height: 56px;
+  margin: 1rem 0 0.75rem;
+  padding: 0.5rem 1rem;
   border-radius: var(--zk-radius);
-  box-shadow: var(--zk-shadow-md);
-  overflow: hidden;
-  font-family: var(--zk-font);
+  background: var(--zk-green-dark);
+  color: #fff;
+  font-weight: 700;
+  font-size: 1.125rem;
+  text-align: center;
+  text-decoration: none;
 }
-.zk-palette-input {
+
+.zk-explain {
+  margin: 0 0 1rem;
+}
+
+.zk-explain > summary {
+  display: flex;
+  align-items: center;
+  min-height: 48px;
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--zk-muted);
+}
+
+.zk-explain[open] > summary {
+  margin-bottom: 0.75rem;
+}
+
+@media (max-width: 719px) {
+  .zk-app {
+    padding-bottom: 5.5rem; /* room for the bottom tab bar */
+  }
+
+  .zk-header {
+    position: static;
+    /* a backdrop-filter would make the header the containing block of the fixed tab bar */
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
+  .zk-theme-toggle {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  .zk-header-inner {
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .zk-tagline,
+  .zk-network-badge,
+  .zk-theme-toggle span {
+    display: none;
+  }
+
+  .zk-nav {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 60;
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: 1fr;
+    gap: 0;
+    padding: 0.4rem 0.4rem calc(0.4rem + env(safe-area-inset-bottom));
+    border-radius: 0;
+    border: 0;
+    border-top: 1px solid var(--zk-border-strong);
+    background: var(--zk-surface);
+    overflow: visible;
+  }
+
+  .zk-tab {
+    min-height: 56px;
+    padding: 0.25rem;
+    font-size: 0.9375rem;
+    border-radius: var(--zk-radius-sm);
+  }
+
+  .zk-shell {
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+
+  .zk-input-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .zk-input-row > *,
+  .zk-app .zk-btn--primary,
+  .zk-app .zk-btn-arrow {
+    width: 100%;
+  }
+
+  .zk-app table {
+    display: block;
+    overflow-x: auto;
+  }
+
+  .zk-app .zk-code {
+    overflow-wrap: anywhere;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Step-by-step screens (components/Steps.tsx)
+   --------------------------------------------------------------------------- */
+
+.zk-steps__tabs {
+  list-style: none;
+  margin: 0 0 1.25rem;
+  padding: 0;
+  display: flex;
+  gap: 0.5rem;
+}
+
+.zk-steps__tabs li {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.zk-steps__tab {
   width: 100%;
-  box-sizing: border-box;
-  padding: 16px 18px;
-  border: 0;
-  border-bottom: 1px solid var(--zk-border);
-  background: transparent;
-  color: inherit;
+  min-height: 56px;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
   font: inherit;
   font-size: 1rem;
-  outline: none;
-}
-.zk-palette-list {
-  list-style: none;
-  margin: 0;
-  padding: 6px;
-  max-height: 320px;
-  overflow-y: auto;
-}
-.zk-palette-item {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 12px;
+  font-weight: 600;
+  text-align: left;
+  color: var(--zk-muted);
+  background: var(--zk-surface);
+  border: 2px solid var(--zk-border);
   border-radius: var(--zk-radius-sm);
   cursor: pointer;
 }
-.zk-palette-item.is-active {
-  background: var(--zk-green-soft);
-  color: var(--zk-green-dark);
-}
-:root[data-theme="dark"] .zk-palette-item.is-active {
-  color: #c9d8a4;
-}
-.zk-palette-hint {
-  color: var(--zk-muted);
-  font-size: 0.8125rem;
-  text-align: right;
-}
-.zk-palette-empty {
-  padding: 14px 12px;
-  color: var(--zk-muted);
-}
-.zk-palette-foot {
-  margin: 0;
-  padding: 8px 14px;
-  border-top: 1px solid var(--zk-border);
-  color: var(--zk-muted);
-  font-size: 0.75rem;
-}
-.zk-palette-trigger {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 12px;
-  border-radius: 999px;
-  border: 1px solid var(--zk-border-strong);
-  background: var(--zk-surface);
-  color: var(--zk-muted);
-  font: inherit;
-  font-size: 0.8125rem;
-  cursor: pointer;
-}
-.zk-palette-trigger:hover,
-.zk-palette-trigger:focus-visible {
+
+.zk-steps__tab[aria-current="step"] {
   color: var(--zk-ink);
-  border-color: var(--zk-green);
-}
-.zk-palette-trigger kbd {
-  font-family: var(--zk-mono);
-  font-size: 0.6875rem;
-  padding: 1px 6px;
-  border-radius: 6px;
-  border: 1px solid var(--zk-border-strong);
-  background: var(--zk-surface-2);
-}
-.zk-toast {
-  position: fixed;
-  left: 50%;
-  bottom: 24px;
-  transform: translateX(-50%);
-  z-index: 1100;
-  padding: 10px 16px;
-  border-radius: 999px;
-  background: var(--zk-ink);
-  color: var(--zk-bg);
-  font-size: 0.875rem;
-  box-shadow: var(--zk-shadow-md);
+  border-color: var(--zk-green-dark);
+  background: var(--zk-green-soft);
 }
 
-/* The palette is keyboard-first; on narrow screens the trigger would crowd the nav tabs. */
-@media (max-width: 720px) {
-  .zk-palette-trigger {
-    display: none;
-  }
-}
-
-/* --- Copy buttons, trial rows, API status pill --- */
-.zk-copy-btn {
-  font: inherit;
-  font-size: 0.75rem;
-  font-weight: 600;
-  padding: 3px 10px;
-  border-radius: 999px;
-  border: 1px solid var(--zk-border-strong);
-  background: var(--zk-surface);
-  color: var(--zk-ink);
-  cursor: pointer;
-  white-space: nowrap;
-}
-.zk-copy-btn:hover,
-.zk-copy-btn:focus-visible {
-  border-color: var(--zk-green);
-  color: var(--zk-green-dark);
-}
-.zk-copy-btn[aria-pressed="true"] {
-  background: var(--zk-green-soft);
-  border-color: var(--zk-green);
-  color: var(--zk-green-dark);
-}
-:root[data-theme="dark"] .zk-copy-btn:hover,
-:root[data-theme="dark"] .zk-copy-btn[aria-pressed="true"] {
-  color: #c9d8a4;
-}
-.zk-trial-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 10px 16px;
-  padding: 10px 12px;
-  margin-bottom: 8px;
-  border: 1px solid var(--zk-border);
-  border-radius: var(--zk-radius-sm);
-  background: var(--zk-surface);
-  list-style: none;
-}
-.zk-trial-row.is-selected {
-  border-color: var(--zk-green);
-  background: var(--zk-green-soft);
-}
-.zk-trial-row-main .zk-meter {
-  margin-top: 8px;
-  max-width: 260px;
-}
-.zk-trial-row-actions {
-  display: flex;
-  gap: 8px;
-}
-.zk-api-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  border-radius: 999px;
-  border: 1px solid var(--zk-border-strong);
-  background: var(--zk-surface);
-  color: var(--zk-muted);
-  font-size: 0.75rem;
-  font-weight: 600;
-  white-space: nowrap;
-}
-.zk-api-dot {
-  width: 8px;
-  height: 8px;
+.zk-steps__num {
+  flex: none;
+  width: 1.75rem;
+  height: 1.75rem;
+  display: grid;
+  place-items: center;
   border-radius: 50%;
+  font-size: 0.9375rem;
+  color: #fff;
   background: var(--zk-muted);
 }
-.zk-api-badge--online .zk-api-dot {
-  background: var(--zk-green);
+
+.zk-steps__tab[aria-current="step"] .zk-steps__num,
+.zk-steps__tab[data-done="true"] .zk-steps__num {
+  background: var(--zk-green-dark);
 }
-.zk-api-badge--waking {
-  color: #8a5300;
-  border-color: #e8c27a;
+
+.zk-steps__panel > * > .zk-h2:first-child,
+.zk-steps__panel .zk-step-title {
+  font-size: 1.625rem;
+  line-height: 1.2;
+  margin: 0 0 0.5rem;
 }
-.zk-api-badge--waking .zk-api-dot {
-  background: #d99a1e;
-  animation: zk-api-pulse 1.2s ease-in-out infinite;
+
+.zk-steps__nav {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 1.75rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--zk-border);
 }
-:root[data-theme="dark"] .zk-api-badge--waking {
-  color: #f0c36b;
-  border-color: #6b4f1a;
+
+.zk-steps__next {
+  margin-left: auto;
 }
-@keyframes zk-api-pulse {
-  50% {
-    opacity: 0.35;
+
+.zk-big-code {
+  font-family: var(--zk-mono);
+  font-size: 2.25rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 719px) {
+  /* Phones: tabs show the number only, except the current one. */
+  .zk-steps__tabs li {
+    flex: 0 0 auto;
   }
-}
-@media (prefers-reduced-motion: reduce) {
-  .zk-api-badge--waking .zk-api-dot {
-    animation: none;
+
+  .zk-steps__tabs li:has([aria-current="step"]) {
+    flex: 1 1 0;
   }
-}
-@media (max-width: 720px) {
-  .zk-api-badge {
+
+  .zk-steps__tab:not([aria-current="step"]) span:last-child {
     display: none;
   }
+
+  .zk-steps__nav {
+    flex-direction: column-reverse;
+  }
+
+  .zk-steps__nav .zk-btn {
+    width: 100%;
+  }
+}
+
+/* Sign-in, account and one-time role choice */
+.zk-btn-block {
+  width: 100%;
+  min-height: 52px;
+  font-size: 1.05rem;
+}
+
+.zk-account {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.zk-account__actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.zk-role-picker {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.zk-role-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  text-align: left;
+  min-height: 72px;
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--zk-border-strong);
+  border-radius: var(--zk-radius);
+  background: var(--zk-surface);
+  color: var(--zk-ink);
+  font: inherit;
+  cursor: pointer;
+  box-shadow: var(--zk-shadow-sm);
+}
+
+.zk-role-card strong {
+  font-size: 1.1rem;
+}
+
+.zk-role-card span {
+  color: var(--zk-muted);
+  font-size: 0.9rem;
+}
+
+.zk-role-card:hover,
+.zk-role-card:focus-visible {
+  border-color: var(--zk-neo-olive);
+  background: var(--zk-green-mist);
+}
+
+.zk-didit {
+  margin-top: 1rem;
+  display: grid;
+  gap: 0.5rem;
+  justify-items: start;
 }

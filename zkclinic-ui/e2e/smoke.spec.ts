@@ -10,6 +10,8 @@ test.describe("ZKClinic UI (app shell)", () => {
     await expect(page).toHaveURL(/\/app\/patient$/);
     await expect(page.getByTestId("zkclinic-app")).toBeVisible();
     await expect(page.getByTestId("brand-title")).toContainText("ZK");
+    await expect(page.getByTestId("link-guided-demo")).toBeVisible();
+    await page.getByTestId("explain-details").locator("summary").click();
     await expect(page.getByTestId("app-architecture")).toBeVisible();
     await expect(page.getByTestId("hero-lead")).toBeVisible();
     await expect(page.getByTestId("btn-connect")).toBeVisible();
@@ -18,8 +20,7 @@ test.describe("ZKClinic UI (app shell)", () => {
   });
 
   test("tabs: patient default, doctor, trials, contract gates", async ({ page }) => {
-    await page.goto("/");
-    await page.getByTestId("nav-launch-app").click();
+    await page.goto("/app/patient?demo=1");
     await expect(page.getByTestId("tab-patient")).toHaveAttribute("aria-current", "page");
     await expect(page.getByTestId("patient-gate")).toBeVisible();
     await page.screenshot({ path: "test-results/screenshots/02-patient-tab.png", fullPage: true });
@@ -38,6 +39,21 @@ test.describe("ZKClinic UI (app shell)", () => {
 
     await page.getByTestId("tab-patient").click();
     await expect(page.getByTestId("patient-gate")).toBeVisible();
+  });
+
+  test("guided demo: three taps from health card to enrolled, on a phone", async ({ page }) => {
+    await page.setViewportSize({ width: 375, height: 812 });
+    await page.goto("/demo");
+    await page.getByTestId("gd-sign").click();
+    await page.getByTestId("gd-check").click();
+    await expect(page.getByRole("heading", { name: "Yes, you qualify" })).toBeVisible();
+    await page.getByTestId("gd-join").click();
+    await expect(page.getByRole("heading", { name: "You are in" })).toBeVisible();
+
+    await page.getByTestId("gd-ravi").click();
+    await page.getByTestId("gd-sign").click();
+    await page.getByTestId("gd-check").click();
+    await expect(page.getByTestId("gd-reason")).toContainText("18 to 65");
   });
 
   test("screenshot: header strip (review)", async ({ page }) => {

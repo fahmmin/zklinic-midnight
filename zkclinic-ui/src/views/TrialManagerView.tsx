@@ -13,8 +13,9 @@ import {
 } from "../trialCriteria";
 import { searchICD10, DEMO_ICD10_CODES, type ICD10Entry } from "../icd10";
 import { icd11TextToCodes, type Icd11Candidate } from "../lib/icd11Api";
-import { CopyButton } from "../components/CopyButton";
-import { slotsFillPercent } from "../lib/savedTrials";
+import { criteriaFromTrial } from "zkclinic-contract";
+import { friendlyErrorMessage } from "../lib/friendlyErrors";
+import { Steps } from "../components/Steps";
 import { ui } from "../ui";
 import {
   demoTrialDeadlineLocal,
@@ -47,6 +48,7 @@ export function TrialManagerView() {
     createTrial,
     closeTrial,
     recordEnrollment,
+    publishTrialCriteria,
     state,
     flowMessage,
     status,
@@ -77,6 +79,7 @@ export function TrialManagerView() {
   const [eligibilityThresholdPercent, setEligibilityThresholdPercent] = useState("75");
   const [trialActionId, setTrialActionId] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [step, setStep] = useState(0);
   const [trialAssistPrompt, setTrialAssistPrompt] = useState(DEMO_TRIAL_ASSIST_PROMPT);
   const [trialAssistBusy, setTrialAssistBusy] = useState(false);
   const [validatePreview, setValidatePreview] = useState<string | null>(null);
@@ -349,7 +352,11 @@ export function TrialManagerView() {
       return;
     }
     const thresholdBps = eligibilityPercentToBps(pct);
+    // Build the circuit criteria first so an un-provable trial fails before any transaction.
+    const zkCriteria = criteriaFromTrial(criteria);
     await createTrial(trialId, slots, deadlineMs, hashHex, thresholdBps);
+    await publishTrialCriteria(trialId, zkCriteria);
+    setStep(1);
   };
 
   const myTrials =
@@ -394,13 +401,7 @@ export function TrialManagerView() {
   return (
     <section className={ui.section} data-testid="trial-manager-view">
       <div className={ui.sectionInner}>
-        <p className={ui.sectionTitle}>Trial managers · matching supply</p>
-        <h2 className={ui.h2}>Define studies patients can match against</h2>
-        <p className={ui.lead}>
-          This is the sponsor side of <strong>clinical trial matching</strong>: publish inclusion / exclusion criteria
-          (ICD-10 + optional ICD-11 via the verification API), commit a criteria hash on-chain, and manage enrollment
-          slots. Patients with a health card check fit privately on the Patient tab.
-        </p>
+        <h2 className={ui.h2}>Run a study</h2>
         {SKIP_TRIAL_METADATA_API && (
           <p className={ui.msgMuted} role="status" data-testid="trial-skip-metadata-api">
             <strong>Midnight-first mode:</strong> <code className={ui.code}>VITE_SKIP_TRIAL_METADATA_API</code> is on —
@@ -419,15 +420,15 @@ export function TrialManagerView() {
 
         {!isDeployed && (
           <p className={ui.msgMuted} data-testid="trial-manager-gate">
-            Deploy or join a contract first.
+            Tap <strong>Connect wallet</strong> above to start.
           </p>
         )}
 
         {isDeployed && (
-          <>
-            <div className={ui.divider} />
-            <p className={ui.sectionTitle}>New trial</p>
-            <h3 className={ui.h2}>Criteria & slots</h3>
+          <Steps labels={["Create a study", "My studies", "People who qualify"]} step={step} onStep={setStep}>
+            <div>
+            <h3 className={ui.h2}>Create a study</h3>
+            <p className={ui.lead}>Example values are filled in. Change what you need, then publish.</p>
 
             <div className={ui.field}>
               <label className={ui.fieldLabel} htmlFor="trial-title-input">
@@ -458,6 +459,8 @@ export function TrialManagerView() {
               />
             </div>
 
+            <details className="zk-explain">
+              <summary>Fill the form from a description (AI)</summary>
             <div className={ui.field}>
               <label className={ui.fieldLabel} htmlFor="trial-assist-prompt">
                 One-shot assistant (Gemini)
@@ -484,9 +487,10 @@ export function TrialManagerView() {
                 disabled={trialAssistBusy}
                 onClick={() => void runTrialAssistant()}
               >
-                {trialAssistBusy ? "Filling…" : "Autofill criteria from description →"}
+                {trialAssistBusy ? "Filling…" : "Fill the form from my description"}
               </button>
             </div>
+            </details>
 
             <p className={ui.sectionTitle} style={{ marginTop: "1rem" }}>
               Inclusion ICD-10
@@ -510,6 +514,8 @@ export function TrialManagerView() {
             </ul>
             <p className={ui.msgMuted}>Selected: {inclusionCodes.join(", ") || "—"}</p>
 
+            <details className="zk-explain">
+              <summary>Who cannot join, and ICD-11 codes (optional)</summary>
             <p className={ui.sectionTitle} style={{ marginTop: "1rem" }}>
               Exclusion ICD-10
             </p>
@@ -585,6 +591,7 @@ export function TrialManagerView() {
                 placeholder="e.g. warfarin, metformin"
               />
             </div>
+            </details>
 
             <div className={ui.fieldRow}>
               <div className={ui.field}>
@@ -681,6 +688,8 @@ export function TrialManagerView() {
               + Lab row
             </button>
 
+            <details className="zk-explain">
+              <summary>Advanced: match score</summary>
             <div className={ui.field}>
               <label className={ui.fieldLabel} htmlFor="trial-match-threshold">
                 Minimum match score (%)
@@ -701,11 +710,12 @@ export function TrialManagerView() {
                 Stored on-chain as basis points and in trial metadata hash.
               </p>
             </div>
+            </details>
 
             <div className={ui.fieldRow}>
               <div className={ui.field}>
                 <label className={ui.fieldLabel} htmlFor="trial-slots-total">
-                  Total slots
+                  Places
                 </label>
                 <input
                   id="trial-slots-total"
@@ -719,7 +729,7 @@ export function TrialManagerView() {
               </div>
               <div className={ui.field}>
                 <label className={ui.fieldLabel} htmlFor="trial-deadline-local">
-                  Deadline (local)
+                  Closes on
                 </label>
                 <input
                   id="trial-deadline-local"
@@ -745,12 +755,13 @@ export function TrialManagerView() {
               data-testid="btn-post-trial"
               onClick={() => void handlePostTrial()}
             >
-              Validate → store metadata → create on-chain
+              Publish study
             </button>
 
-            <div className={ui.divider} />
-            <p className={ui.sectionTitle}>Manage trials (your wallet)</p>
-            <h3 className={ui.h2}>Close or record enrollment</h3>
+            </div>
+
+            <div>
+            <h3 className={ui.h2}>My studies</h3>
             <div className={ui.field}>
               <label className={ui.fieldLabel} htmlFor="trial-id-action">
                 Trial id (64 hex)
@@ -776,67 +787,27 @@ export function TrialManagerView() {
               >
                 Close trial
               </button>
-              <button
-                type="button"
-                className={ui.btnPrimary}
-                data-testid="btn-record-enrollment"
-                onClick={() =>
-                  trialActionId && void recordEnrollment(trialActionId).catch((e) => setError(String(e)))
-                }
-                disabled={!trialActionId || trialActionId.length !== 64}
-              >
-                Record enrollment (+1 slot)
-              </button>
             </div>
 
             {myTrials.length > 0 && (
               <ul className={ui.list} data-testid="trial-manager-my-list">
-                {myTrials.map((t) => {
-                  const selected = trialActionId === t.trialId.toLowerCase();
-                  return (
-                    <li key={t.trialId} className={`zk-trial-row${selected ? " is-selected" : ""}`}>
-                      <div className="zk-trial-row-main">
-                        <code className={ui.code}>{t.trialId.slice(0, 16)}…</code> — slots{" "}
-                        {t.slotsFilled.toString()}/{t.slotsTotal.toString()} —{" "}
-                        {TRIAL_STATUS[t.status] ?? t.status} — min match ≥{" "}
-                        {(Number(t.eligibilityThresholdBps) / 100).toFixed(0)}%
-                        <div
-                          className="zk-meter"
-                          role="progressbar"
-                          aria-label="Enrollment slots filled"
-                          aria-valuemin={0}
-                          aria-valuemax={100}
-                          aria-valuenow={slotsFillPercent(t.slotsFilled, t.slotsTotal)}
-                        >
-                          <div
-                            className="zk-meter-fill"
-                            style={{ width: `${slotsFillPercent(t.slotsFilled, t.slotsTotal)}%` }}
-                          />
-                        </div>
-                      </div>
-                      <div className="zk-trial-row-actions">
-                        <button
-                          type="button"
-                          className="zk-copy-btn"
-                          aria-pressed={selected}
-                          onClick={() => setTrialActionId(t.trialId.toLowerCase())}
-                          data-testid={`btn-use-trial-${t.trialId.slice(0, 8)}`}
-                        >
-                          {selected ? "Selected ✓" : "Use this trial"}
-                        </button>
-                        <CopyButton value={t.trialId} label="Copy ID" />
-                      </div>
-                    </li>
-                  );
-                })}
+                {myTrials.map((t) => (
+                  <li key={t.trialId}>
+                    <code className={ui.code}>{t.trialId.slice(0, 16)}…</code> — slots {t.slotsFilled.toString()}/
+                    {t.slotsTotal.toString()} — {TRIAL_STATUS[t.status] ?? t.status} — min match ≥{" "}
+                    {(Number(t.eligibilityThresholdBps) / 100).toFixed(0)}%
+                  </li>
+                ))}
               </ul>
             )}
 
-            <div className={ui.divider} />
-            <p className={ui.sectionTitle}>Match submissions (verification API)</p>
+            </div>
+
+            <div>
+            <h3 className={ui.h2}>People who qualify</h3>
             <p className={ui.lead}>
-              When patients post a proof ID, the API stores their <strong>match score %</strong> and threshold for your
-              trials. List refreshes when you load this tab; use refresh if the API was down.
+              Each row is a code name, not a person. <strong>Verified on Midnight</strong> means the network checked
+              their proof against your rules. You never see their diagnosis, test results or age.
             </p>
             {proofsFetchError && (
               <p className={ui.msgMuted} role="status">
@@ -859,6 +830,8 @@ export function TrialManagerView() {
                     <th style={{ textAlign: "left", padding: "0.35rem" }}>Threshold %</th>
                     <th style={{ textAlign: "left", padding: "0.35rem" }}>Eligible</th>
                     <th style={{ textAlign: "left", padding: "0.35rem" }}>Proof ID</th>
+                    <th style={{ textAlign: "left", padding: "0.35rem" }}>On-chain</th>
+                    <th style={{ textAlign: "left", padding: "0.35rem" }} />
                   </tr>
                 </thead>
                 <tbody>
@@ -875,6 +848,33 @@ export function TrialManagerView() {
                       <td style={{ padding: "0.35rem" }}>
                         <code className={ui.code}>{p.proofId}</code>
                       </td>
+                      {(() => {
+                        const nul = p.pseudonym.toLowerCase();
+                        const verified = state?.eligibilityProofs[nul] === p.trialIdHex.toLowerCase();
+                        const enrolled = !!state?.enrolledProofs.includes(nul);
+                        return (
+                          <>
+                            <td style={{ padding: "0.35rem" }} data-testid="proof-onchain-status">
+                              {enrolled ? "Enrolled" : verified ? "Verified on Midnight" : "Not on-chain"}
+                            </td>
+                            <td style={{ padding: "0.35rem" }}>
+                              <button
+                                type="button"
+                                className={ui.btnPrimary}
+                                data-testid="btn-record-enrollment"
+                                disabled={!verified || enrolled}
+                                onClick={() =>
+                                  void recordEnrollment(p.trialIdHex, nul).catch((e) =>
+                                    setError(friendlyErrorMessage(e instanceof Error ? e.message : String(e)))
+                                  )
+                                }
+                              >
+                                Enroll
+                              </button>
+                            </td>
+                          </>
+                        );
+                      })()}
                     </tr>
                   ))}
                 </tbody>
@@ -882,11 +882,12 @@ export function TrialManagerView() {
             ) : (
               !proofsFetchError && (
                 <p className={ui.msgMuted} style={{ marginTop: "0.5rem" }}>
-                  No proofs yet for your manager key, or API unreachable.
+                  Nobody has qualified yet. Rows appear here when a patient proves they fit.
                 </p>
               )
             )}
-          </>
+            </div>
+          </Steps>
         )}
       </div>
     </section>

@@ -1,5 +1,4 @@
 import path from "node:path";
-import { setNetworkId } from "@midnight-ntwrk/midnight-js-network-id";
 
 export const currentDir = path.resolve(new URL(import.meta.url).pathname, "..");
 
@@ -25,10 +24,6 @@ export class StandaloneConfig implements Config {
   node = "http://127.0.0.1:9944";
   proofServer = "http://127.0.0.1:6300";
   networkId = "undeployed";
-
-  constructor() {
-    setNetworkId(this.networkId);
-  }
 }
 
 export class PreviewConfig implements Config {
@@ -37,10 +32,6 @@ export class PreviewConfig implements Config {
   node = "wss://rpc.preview.midnight.network";
   proofServer = process.env.PROOF_SERVER_URL ?? "http://127.0.0.1:6300";
   networkId = "preview";
-
-  constructor() {
-    setNetworkId(this.networkId);
-  }
 }
 
 /**
@@ -54,16 +45,5 @@ export class PreprodConfig implements Config {
   node = "https://rpc.preprod.midnight.network";
   proofServer = process.env.PROOF_SERVER_URL ?? "http://127.0.0.1:6300";
   networkId = "preprod";
-
-  constructor() {
-    // Midnight-hosted preprod indexer/RPC were retired on 2026-10-09; Blockfrost is the provider now.
-    const projectId = process.env.BLOCKFROST_PROJECT_ID?.trim();
-    if (projectId) {
-      const token = encodeURIComponent(projectId);
-      this.indexer = `https://midnight-preprod.blockfrost.io/api/v0?project_id=${token}`;
-      this.indexerWS = `wss://midnight-preprod.blockfrost.io/api/v0/ws?project_id=${token}`;
-      this.node = `https://rpc.midnight-preprod.blockfrost.io?project_id=${token}`;
-    }
-    setNetworkId(this.networkId);
-  }
 }
+

@@ -2,6 +2,7 @@
   "name": "zkclinic",
   "version": "0.1.0",
   "private": true,
+  "license": "Apache-2.0",
   "type": "module",
   "engines": {
     "node": ">=22.0.0"
@@ -34,25 +35,24 @@
     "vitest": "^4.0.15"
   },
   "dependencies": {
-    "@midnight-ntwrk/compact-js": "2.4.0",
-    "@midnight-ntwrk/compact-runtime": "0.14.0",
-    "@midnight-ntwrk/dapp-connector-api": "4.0.0",
-    "@midnight-ntwrk/ledger-v7": "7.0.0",
-    "@midnight-ntwrk/midnight-js-contracts": "3.1.0",
-    "@midnight-ntwrk/midnight-js-http-client-proof-provider": "3.1.0",
-    "@midnight-ntwrk/midnight-js-indexer-public-data-provider": "3.1.0",
-    "@midnight-ntwrk/midnight-js-level-private-state-provider": "3.1.0",
-    "@midnight-ntwrk/midnight-js-network-id": "3.1.0",
-    "@midnight-ntwrk/midnight-js-node-zk-config-provider": "3.1.0",
-    "@midnight-ntwrk/midnight-js-types": "3.1.0",
-    "@midnight-ntwrk/midnight-js-utils": "3.1.0",
-    "@midnight-ntwrk/wallet-sdk-abstractions": "1.0.0",
-    "@midnight-ntwrk/wallet-sdk-address-format": "3.0.0",
-    "@midnight-ntwrk/wallet-sdk-dust-wallet": "1.0.0",
-    "@midnight-ntwrk/wallet-sdk-facade": "1.0.0",
-    "@midnight-ntwrk/wallet-sdk-hd": "3.0.0",
-    "@midnight-ntwrk/wallet-sdk-shielded": "1.0.0",
-    "@midnight-ntwrk/wallet-sdk-unshielded-wallet": "1.0.0",
+    "@midnight-ntwrk/compact-js": "3.0.0",
+    "@midnight-ntwrk/compact-runtime": "0.21.0",
+    "@midnight-ntwrk/dapp-connector-api": "4.1.0",
+    "@midnight-ntwrk/midnight-js-contracts": "5.0.0",
+    "@midnight-ntwrk/midnight-js-http-client-proof-provider": "5.0.0",
+    "@midnight-ntwrk/midnight-js-indexer-public-data-provider": "5.0.0",
+    "@midnight-ntwrk/midnight-js-level-private-state-provider": "5.0.0",
+    "@midnight-ntwrk/midnight-js-node-zk-config-provider": "5.0.0",
+    "@midnight-ntwrk/midnight-js-protocol": "5.0.0",
+    "@midnight-ntwrk/midnight-js-types": "5.0.0",
+    "@midnight-ntwrk/midnight-js-utils": "5.0.0",
+    "@midnight-ntwrk/wallet-sdk-abstractions": "3.0.0",
+    "@midnight-ntwrk/wallet-sdk-address-format": "4.0.0",
+    "@midnight-ntwrk/wallet-sdk-dust-wallet": "5.0.0",
+    "@midnight-ntwrk/wallet-sdk-facade": "5.0.0",
+    "@midnight-ntwrk/wallet-sdk-hd": "4.0.0",
+    "@midnight-ntwrk/wallet-sdk-shielded": "4.0.0",
+    "@midnight-ntwrk/wallet-sdk-unshielded-wallet": "4.0.0",
     "@scure/bip39": "^2.0.1",
     "dotenv": "^17.2.3",
     "pino": "^10.1.0",
@@ -60,8 +60,9 @@
     "rxjs": "^7.8.1"
   },
   "resolutions": {
-    "@midnight-ntwrk/ledger-v7": "7.0.0",
-    "@midnight-ntwrk/midnight-js-network-id": "3.1.0",
-    "@midnight-ntwrk/compact-runtime": "0.14.0"
+    "@midnight-ntwrk/compact-runtime": "0.21.0"
+  },
+  "overrides": {
+    "@midnightntwrk/ledger-v9": "1.0.0"
   }
 }

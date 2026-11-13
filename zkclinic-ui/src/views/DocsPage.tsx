@@ -177,7 +177,7 @@ export function DocsPage() {
               <li>
                 <strong className="font-medium text-foreground">Compact / ledger:</strong>{" "}
                 <Code>@midnight-ntwrk/compact-js</Code>, <Code>@midnight-ntwrk/compact-runtime</Code>,{" "}
-                <Code>@midnight-ntwrk/ledger-v7</Code>, packaged contract <Code>zkclinic-contract</Code>.
+                <Code>@midnight-ntwrk/ledger-v8</Code>, packaged contract <Code>zkclinic-contract</Code>.
               </li>
               <li>
                 <strong className="font-medium text-foreground">Transactions &amp; proofs:</strong>{" "}
@@ -318,6 +318,13 @@ export function DocsPage() {
               against the registry, eligibility evaluation against trial criteria, credential-to-trial binding,
               and trial-scoped pseudonym derivation. Proofs are generated where the credential lives (patient
               device); only the agreed public outputs are posted.
+            </P>
+            <P>
+              Implemented today: <Code>proveEligibility</Code>. Its private witnesses are the patient secret key,
+              the doctor-attested attributes (age, diagnosis codes, lab values, expiry) and a Merkle path into the
+              on-chain tree of credential commitments. Its only public outputs are the trial id and a per-trial
+              nullifier, which doubles as the applicant pseudonym. <Code>recordEnrollment</Code> then accepts only a
+              nullifier that proved eligibility for that exact trial.
             </P>
             <P>
               Operational guidance: pin proof-verifier versions with contract releases, document circuit change

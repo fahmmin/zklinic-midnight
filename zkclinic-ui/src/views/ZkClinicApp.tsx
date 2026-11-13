@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   DEMO_NMC_DOCTOR_ID,
   DEMO_NMC_REGISTRATION_NO,
@@ -6,17 +6,12 @@ import {
   DEMO_OCR_SMC_HINT
 } from "../lib/demoWorkspaceMocks";
 import { Link, NavLink, useNavigate, useParams } from "react-router-dom";
-import { ApiStatusBadge } from "../components/ApiStatusBadge";
-import { OPEN_COMMAND_PALETTE_EVENT } from "../components/CommandPalette";
 import { GuidedFlowBanner } from "../components/GuidedFlowBanner";
 import { ShieldLeafIcon, SparkGridIcon } from "../components/illustrations/ZkClinicSvgs";
-import {
-  defaultContractAddressFromEnv,
-  shouldAutoJoinContract,
-  showDevToolsPanel
-} from "../lib/envContract";
+import { defaultContractAddressFromEnv, showDevToolsPanel } from "../lib/envContract";
 import { formatMidnightNetworkLabel, viteMidnightNetworkId } from "../lib/buildNetwork";
 import { friendlyErrorMessage } from "../lib/friendlyErrors";
+import { isDemoMode, saveRole, setDemoMode, storedRole, type Role } from "../lib/role";
 import { useTheme } from "../contexts/ThemeContext";
 import { useZKClinic } from "../contexts/ZKClinicContext";
 import { PatientView } from "./PatientView";
@@ -45,6 +40,8 @@ const BUILD_MIDNIGHT_NETWORK_ID = viteMidnightNetworkId();
 const BUILD_MIDNIGHT_NETWORK_LABEL = formatMidnightNetworkLabel(BUILD_MIDNIGHT_NETWORK_ID);
 
 const JOIN_ADDRESS_STORAGE_KEY = "zkclinic-join-contract-address";
+/** Set after a successful connect, so the next visit reconnects without a tap (the wallet already trusts this site). */
+const RECONNECT_KEY = "zkclinic-reconnect";
 
 function readStoredJoinAddress(): string {
   try {
@@ -132,7 +129,6 @@ export function ZkClinicApp() {
     walletAddress,
     walletConnectorName,
     flowMessage,
-    connect,
     join,
     refreshState,
     approveIssuer,
@@ -174,22 +170,28 @@ export function ZkClinicApp() {
     }
   }, [joinAddress]);
 
-  const handleConnect = async () => {
+  /** One tap: open the wallet and join the clinic contract. Falls back to the build's address if a saved one is stale. */
+  const connectAndJoin = async () => {
     setActionError(null);
-    try {
-      await connect();
-    } catch (e) {
-      const raw = e instanceof Error ? e.message : String(e);
-      const lower = raw.toLowerCase();
-      if (lower.includes("network") && lower.includes("mismatch")) {
-        setActionError(
-          friendlyErrorMessage(
-            `Network mismatch: this build expects VITE_NETWORK_ID=${expectedNetworkId}. ` +
-              "Switch your wallet to that network, or set VITE_NETWORK_ID to match the wallet in `.env.preview` / `.env.preprod` / `.env.undeployed` or `.env.local`, then rebuild."
-          )
-        );
-      } else {
-        setActionError(friendlyErrorMessage(raw));
+    const candidates = [...new Set([joinAddress.trim(), defaultContractAddressFromEnv()].filter(Boolean))];
+    if (candidates.length === 0) {
+      setActionError("This build has no clinic contract address. Open “Use a different contract” and paste one.");
+      return;
+    }
+    for (const [i, address] of candidates.entries()) {
+      try {
+        await join(address);
+        if (address !== joinAddress.trim()) setJoinAddress(address);
+        try {
+          localStorage.setItem(RECONNECT_KEY, "1");
+        } catch {
+          /* ignore */
+        }
+        return;
+      } catch (e) {
+        if (i === candidates.length - 1) {
+          setActionError(friendlyErrorMessage(e instanceof Error ? e.message : String(e)));
+        }
       }
     }
   };
@@ -207,10 +209,10 @@ export function ZkClinicApp() {
     }
   };
 
-  const handleApprove = async () => {
+  const handleApprove = async (keyArg?: string) => {
     setActionError(null);
     setPendingReviewId(null);
-    const key = doctorToApprove.trim();
+    const key = (keyArg ?? doctorToApprove).trim();
     if (!key) {
       setActionError("Enter doctor public key (32-byte hex)");
       return;
@@ -267,54 +269,74 @@ export function ZkClinicApp() {
 
   const isConnected = !!walletAddress;
   const isDeployed = status === "deployed";
+  const isAdmin = !!walletDoctorKeyHex && state?.admin === walletDoctorKeyHex.toLowerCase();
 
-  const envContractHint = defaultContractAddressFromEnv();
-
-  const willAutoJoinWithValidAddress = useMemo(() => {
-    if (!shouldAutoJoinContract()) return false;
-    const raw = joinAddress.trim().replace(/^0x/i, "");
-    return raw.length >= 64;
-  }, [joinAddress]);
-
-  const autoJoinRunRef = useRef(false);
-
+  const autoConnectRan = useRef(false);
   useEffect(() => {
-    if (!shouldAutoJoinContract()) return;
-    const raw = joinAddress.trim().replace(/^0x/i, "");
-    if (raw.length < 64) return;
-    if (status === "deployed" || status === "in-progress") return;
-    const doneKey = `zkclinic-autojoin-ok-${raw}`;
+    if (autoConnectRan.current || status !== "idle") return;
+    let returning = false;
     try {
-      if (sessionStorage.getItem(doneKey) === "1") return;
+      returning = localStorage.getItem(RECONNECT_KEY) === "1";
     } catch {
       /* ignore */
     }
-    if (autoJoinRunRef.current) return;
-    autoJoinRunRef.current = true;
-    let cancelled = false;
-    setActionError(null);
-    void (async () => {
-      try {
-        await join(raw);
-        if (!cancelled) {
-          try {
-            sessionStorage.setItem(doneKey, "1");
-          } catch {
-            /* ignore */
-          }
-        }
-      } catch (e) {
-        if (!cancelled) {
-          autoJoinRunRef.current = false;
-          setActionError(friendlyErrorMessage(e instanceof Error ? e.message : String(e)));
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-      autoJoinRunRef.current = false;
-    };
-  }, [joinAddress, status, join]);
+    if (!returning) return;
+    autoConnectRan.current = true;
+    void connectAndJoin();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status]);
+
+  // --- Sign-in and roles: the wallet is the account; each wallet picks a role once and lands in it. ---
+  const [demo, setDemo] = useState(isDemoMode);
+  const [role, setRole] = useState<Role | null>(null);
+  const isApprovedDoctor =
+    !!walletDoctorKeyHex &&
+    !!state?.issuers.some((i) => i.doctor === walletDoctorKeyHex.toLowerCase() && i.status === 2);
+
+  useEffect(() => {
+    if (!walletAddress) return setRole(null);
+    // An approved doctor on-chain is a doctor, whatever this device remembers.
+    setRole(isApprovedDoctor ? "doctor" : storedRole(walletAddress));
+  }, [walletAddress, isApprovedDoctor]);
+
+  useEffect(() => {
+    if (demo || !role || tab === role || (tab === "contract" && isAdmin)) return;
+    navigate(`/app/${role}`, { replace: true });
+  }, [demo, role, tab, isAdmin, navigate]);
+
+  const pickRole = (r: Role | null) => {
+    if (!walletAddress) return;
+    saveRole(walletAddress, r);
+    setRole(r);
+    if (r) navigate(`/app/${r}`);
+  };
+
+  const signOut = () => {
+    try {
+      localStorage.removeItem(RECONNECT_KEY);
+    } catch {
+      /* ignore */
+    }
+    // The wallet connector has no disconnect call; a reload drops the session.
+    window.location.assign("/app");
+  };
+
+  const toggleDemo = () => {
+    setDemoMode(!demo);
+    setDemo(!demo);
+  };
+  // Long-press the logo for demo mode (role switcher for recordings); hidden from everyday users.
+  const pressTimer = useRef<number | undefined>(undefined);
+  const pressHandlers = {
+    onPointerDown: () => {
+      pressTimer.current = window.setTimeout(toggleDemo, 800);
+    },
+    onPointerUp: () => window.clearTimeout(pressTimer.current),
+    onPointerLeave: () => window.clearTimeout(pressTimer.current)
+  };
+
+  const showRoleView = demo || (isDeployed && !!role);
+  const ROLE_LABEL: Record<Role, string> = { patient: "Patient", doctor: "Doctor", trials: "Study team" };
 
   return (
     <div className={ui.app} data-testid="zkclinic-app">
@@ -328,29 +350,16 @@ export function ZkClinicApp() {
           >
             ← Home
           </Link>
-          <div className={ui.brand}>
+          <div className={ui.brand} {...pressHandlers} style={{ userSelect: "none" }}>
             <div className={ui.brandMark} data-testid="brand-title">
               ZK<span>linic</span>
             </div>
-            <p className={ui.tagline}>
-              Clinical trial matching powered by your on-device health card — staff tools stay out of the main path.
-            </p>
+            <p className={ui.tagline}>Prove you fit a study without sharing your records.</p>
           </div>
           <div className="zk-header-actions">
             <span className="zk-network-badge" data-testid="build-midnight-network" title="VITE_NETWORK_ID for this build">
               Midnight · {BUILD_MIDNIGHT_NETWORK_LABEL}
             </span>
-            <ApiStatusBadge />
-            <button
-              type="button"
-              className="zk-palette-trigger"
-              data-testid="btn-open-palette"
-              onClick={() => window.dispatchEvent(new Event(OPEN_COMMAND_PALETTE_EVENT))}
-              aria-label="Open command palette"
-            >
-              <span>Quick actions</span>
-              <kbd>Ctrl K</kbd>
-            </button>
             <button
               type="button"
               className="zk-theme-toggle"
@@ -371,7 +380,8 @@ export function ZkClinicApp() {
                 </>
               )}
             </button>
-            <nav className={ui.nav} aria-label="Primary">
+            {demo && (
+            <nav className={ui.nav} aria-label="Demo role switcher">
               <NavLink to="/app/patient" className={ui.tab} data-testid="tab-patient" end>
                 Patient
               </NavLink>
@@ -379,17 +389,28 @@ export function ZkClinicApp() {
                 Doctor
               </NavLink>
               <NavLink to="/app/trials" className={ui.tab} data-testid="tab-trials">
-                Trial programs
+                Studies
               </NavLink>
               <NavLink to="/app/contract" className={ui.tab} data-testid="tab-contract">
                 Contract
               </NavLink>
+              <button type="button" className={ui.tab} onClick={toggleDemo} data-testid="btn-exit-demo">
+                Exit demo
+              </button>
             </nav>
+            )}
           </div>
         </div>
       </header>
 
       <main className={ui.shell}>
+        {!isDeployed && (
+          <Link to="/demo" className="zk-demo-link" data-testid="link-guided-demo">
+            New here? Try the 1-minute demo first
+          </Link>
+        )}
+        <details className="zk-explain" data-testid="explain-details" hidden={isDeployed && !demo}>
+          <summary>How this works</summary>
         <GuidedFlowBanner walletConnected={isConnected} contractDeployed={isDeployed} />
 
         {tab === "patient" && (
@@ -429,16 +450,14 @@ export function ZkClinicApp() {
 
         {tab === "patient" && (
           <p className={ui.lead} style={{ marginTop: "1.25rem" }} data-testid="hero-lead">
-            Connect your wallet and paste the clinic contract address below when you are ready. Your health card and
-            trial matching live on the <strong>Patient</strong> tab. Doctors and trial sponsors use their own tabs;
-            on-chain summaries are on <strong>Contract</strong>. Site administrators approve new issuers under{" "}
-            <strong>Doctor</strong> → Site administration.
+            Tap <strong>Connect wallet</strong> once. Your health card and study matching live on the{" "}
+            <strong>Patient</strong> tab; doctors and study teams use their own tabs.
           </p>
         )}
         {tab === "doctor" && (
           <p className={ui.lead} style={{ marginTop: "1.25rem" }} data-testid="hero-lead-doctor">
-            Issue and update patient cards, request verification, and (when you are an admin) approve or revoke issuers
-            in <strong>Site administration</strong> at the bottom of this tab.
+            Issue patient health cards. If your wallet runs the clinic, doctor approvals appear at the bottom of this
+            tab.
           </p>
         )}
         {tab === "trials" && (
@@ -453,6 +472,7 @@ export function ZkClinicApp() {
             Administrative actions stay on the Doctor tab.
           </p>
         )}
+        </details>
 
         {showDevToolsPanel() && (
         <section className={ui.section} data-testid="section-zk-circuits" aria-label="ZK circuits and static assets">
@@ -460,8 +480,9 @@ export function ZkClinicApp() {
             <p className={ui.sectionTitle}>ZK</p>
             <h2 className={ui.h2}>On-chain circuits & static assets</h2>
             <p className={ui.msgMuted} style={{ marginBottom: "0.75rem" }}>
-              This contract uses <strong>vacant witnesses</strong> (no separate <code className={ui.code}>witnesses.ts</code>{" "}
-              in the browser bundle). Proofs load from <code className={ui.code}>/zkclinic/keys/*.prover</code> and{" "}
+              Patient circuits read <strong>private witnesses</strong> (ZK secret key, attested attributes, Merkle
+              path) from on-device private state via <code className={ui.code}>contract/src/witnesses.ts</code>. Proofs
+              load from <code className={ui.code}>/zkclinic/keys/*.prover</code> and{" "}
               <code className={ui.code}>/zkclinic/zkir/*.bzkir</code> after{" "}
               <code className={ui.code}>npm run copy-contract-assets</code> — same role as example-zkloan’s{" "}
               <code className={ui.code}>/keys</code> and <code className={ui.code}>/zkir</code> at the site root.
@@ -512,115 +533,79 @@ export function ZkClinicApp() {
 
         <section className={ui.section} data-testid="section-wallet">
           <div className={ui.sectionInner}>
-            <p className={ui.sectionTitle}>Wallet</p>
-            <h2 className={ui.h2}>Connect wallet</h2>
-            <p className={ui.msgMuted} style={{ marginBottom: "0.75rem" }}>
-              {willAutoJoinWithValidAddress
-                ? "Auto-join is enabled — your wallet will open when the contract connection runs."
-                : "Connect your wallet first (Lace or 1AM). Then use Connect contract below with the registry address."}
-            </p>
-            {!isConnected ? (
-              <button
-                type="button"
-                className={ui.btn}
-                data-testid="btn-connect"
-                onClick={handleConnect}
-                disabled={status === "in-progress" || isConnecting}
-              >
-                {isConnecting ? "Connecting…" : "Connect wallet"}
-              </button>
-            ) : (
-              <div className={ui.stackSm} data-testid="wallet-connected">
+            {isDeployed ? (
+              <div className="zk-account" data-testid="wallet-connected">
                 <p className={ui.msg}>
-                  Connected
-                  {walletConnectorName ? (
-                    <>
-                      {" "}
-                      via <strong>{walletConnectorName}</strong>
-                    </>
-                  ) : null}{" "}
-                  <code className={ui.code}>{walletAddress?.slice(0, 24)}…</code>
+                  ✓ Signed in{walletConnectorName ? <> with <strong>{walletConnectorName}</strong></> : null}
+                  {walletAddress ? <> · <code className={ui.code}>{walletAddress.slice(0, 10)}…</code></> : null}
+                  {role ? <> · {ROLE_LABEL[role]}</> : null}
                 </p>
-                {walletNetworkId && (
-                  <p className={ui.msgMuted} data-testid="wallet-network-id">
-                    Network: <code className={ui.code}>{walletNetworkId}</code>
-                    {walletNetworkId.toLowerCase() !== expectedNetworkId.toLowerCase() && (
-                      <span className={ui.warnInline}>
-                        {" "}
-                        (build expects <code className={ui.code}>{expectedNetworkId}</code> — align the wallet network
-                        or rebuild with matching <code className={ui.code}>VITE_NETWORK_ID</code>)
-                      </span>
-                    )}
-                  </p>
-                )}
+                <div className="zk-account__actions">
+                  {role && !isApprovedDoctor && (
+                    <button type="button" className={ui.btn} onClick={() => pickRole(null)} data-testid="btn-change-role">
+                      Change role
+                    </button>
+                  )}
+                  <button type="button" className={ui.btn} onClick={signOut} data-testid="btn-sign-out">
+                    Sign out
+                  </button>
+                </div>
               </div>
-            )}
-          </div>
-        </section>
-
-        {!isDeployed && (
-          <section className={ui.section} data-testid="section-contract">
-            <div className={ui.sectionInner}>
-              <p className={ui.sectionTitle}>Contract</p>
-              <h2 className={ui.h2}>Contract connection</h2>
-              {envContractHint ? (
-                <p className={ui.msgMuted} data-testid="contract-env-hint" style={{ marginBottom: "0.75rem" }}>
-                  Default from <code className={ui.code}>VITE_CONTRACT_ADDRESS</code> when set. The value is{" "}
-                  <strong>saved in this browser</strong> when you edit it.
-                  {shouldAutoJoinContract() ? (
-                    <>
-                      {" "}
-                      Auto-join is <strong>on</strong> (
-                      <code className={ui.code}>VITE_AUTO_JOIN_CONTRACT</code> or{" "}
-                      <code className={ui.code}>VITE_AUTO_CONNECT</code>
-                      ).
-                    </>
-                  ) : null}
-                </p>
-              ) : (
+            ) : status === "in-progress" ? (
+              <p className={ui.msgFlow} data-testid="flow-message">
+                {flowMessage ?? "Signing in…"}
+              </p>
+            ) : (
+              <>
+                <h2 className={ui.h2}>Sign in with your wallet</h2>
                 <p className={ui.msgMuted} style={{ marginBottom: "0.75rem" }}>
-                  Enter the registry contract address (saved on this device), or set{" "}
-                  <code className={ui.code}>VITE_CONTRACT_ADDRESS</code> in your env file for a build-time default. Deploy
-                  with <code className={ui.code}>zkclinic-cli</code>.
+                  Your Midnight wallet is your account. No email, no password. Use 1AM on Chrome, Android or iOS,
+                  or Lace on desktop.
                 </p>
-              )}
-              {!isConnected && status !== "in-progress" && (
-                <p className={ui.msgMuted} style={{ marginBottom: "0.75rem" }} data-testid="contract-connect-wallet-hint">
-                  Connect your wallet above to enable <strong>Connect contract</strong>.
-                </p>
-              )}
-              {status === "in-progress" ? (
-                <p className={ui.msgFlow} data-testid="flow-message">
-                  {flowMessage ?? "Working…"}
-                </p>
-              ) : (
+                <button
+                  type="button"
+                  className={`${ui.btnPrimary} zk-btn-block`}
+                  data-testid="btn-connect"
+                  onClick={() => void connectAndJoin()}
+                  disabled={isConnecting}
+                >
+                  {isConnecting ? "Signing in…" : "Sign in with wallet"}
+                </button>
+              </>
+            )}
+            {isConnected && walletNetworkId && walletNetworkId.toLowerCase() !== expectedNetworkId.toLowerCase() && (
+              <p className={ui.warnInline} data-testid="wallet-network-id">
+                Your wallet is on {walletNetworkId}; this app uses {expectedNetworkId}. Switch networks in the wallet.
+              </p>
+            )}
+            {!isDeployed && status !== "in-progress" && (
+              <details className="zk-explain" data-testid="section-contract">
+                <summary>Use a different contract</summary>
                 <div className={ui.inputRow}>
                   <input
                     className={ui.input}
-                    placeholder="Contract address (e.g. 0100… or 64 hex)"
+                    placeholder="Contract address (64 hex)"
                     value={joinAddress}
                     onChange={(e) => setJoinAddress(e.target.value)}
                     onKeyDown={(e) => {
-                      if (e.key === "Enter" && isConnected && joinAddress.trim()) void handleJoin();
+                      if (e.key === "Enter" && joinAddress.trim()) void handleJoin();
                     }}
                     data-testid="input-contract-address"
                   />
-                  {isConnected ? (
-                    <button
-                      type="button"
-                      className={ui.btnPrimary}
-                      data-testid="btn-contract-connect"
-                      onClick={handleJoin}
-                      disabled={!joinAddress.trim()}
-                    >
-                      Connect contract
-                    </button>
-                  ) : null}
+                  <button
+                    type="button"
+                    className={ui.btn}
+                    data-testid="btn-contract-connect"
+                    onClick={handleJoin}
+                    disabled={!joinAddress.trim()}
+                  >
+                    Connect contract
+                  </button>
                 </div>
-              )}
-            </div>
-          </section>
-        )}
+              </details>
+            )}
+          </div>
+        </section>
 
         {(error || actionError) && (
           <p className={ui.msgError} data-testid="error-message" role="alert">
@@ -634,11 +619,36 @@ export function ZkClinicApp() {
           </p>
         )}
 
-        {tab === "patient" && <PatientView />}
-        {tab === "doctor" && <DoctorView />}
-        {tab === "trials" && <TrialManagerView />}
+        {isDeployed && !role && !demo && (
+          <section className={ui.section} data-testid="section-role-picker">
+            <div className={ui.sectionInner}>
+              <h2 className={ui.h2}>What brings you here?</h2>
+              <p className={ui.msgMuted} style={{ marginBottom: "0.9rem" }}>
+                Pick once. The app remembers it for this wallet.
+              </p>
+              <div className="zk-role-picker">
+                <button type="button" className="zk-role-card" onClick={() => pickRole("patient")} data-testid="role-patient">
+                  <strong>I'm a patient</strong>
+                  <span>Keep my health card and find studies I fit</span>
+                </button>
+                <button type="button" className="zk-role-card" onClick={() => pickRole("trials")} data-testid="role-trials">
+                  <strong>I run a study</strong>
+                  <span>Publish who can join and enroll verified patients</span>
+                </button>
+                <button type="button" className="zk-role-card" onClick={() => pickRole("doctor")} data-testid="role-doctor">
+                  <strong>I'm a doctor</strong>
+                  <span>Verify my medical ID once, then issue health cards</span>
+                </button>
+              </div>
+            </div>
+          </section>
+        )}
 
-        {tab === "contract" && (
+        {showRoleView && tab === "patient" && <PatientView />}
+        {showRoleView && tab === "doctor" && <DoctorView />}
+        {showRoleView && tab === "trials" && <TrialManagerView />}
+
+        {(demo || isAdmin) && tab === "contract" && (
           <>
             {!isDeployed || !contractAddress ? (
               <section className={ui.section} data-testid="section-contract-gate">
@@ -646,8 +656,8 @@ export function ZkClinicApp() {
                   <p className={ui.sectionTitle}>Contract</p>
                   <h2 className={ui.h2}>Connect a contract first</h2>
                   <p className={ui.msgMuted}>
-                    Use the wallet and contract fields above to join this clinic deployment. This tab then shows a
-                    read-only summary of on-chain issuers, pending requests, and trials.
+                    Tap Connect wallet above. This tab then shows a read-only summary of on-chain issuers, pending
+                    requests, and studies.
                   </p>
                 </div>
               </section>
@@ -661,25 +671,37 @@ export function ZkClinicApp() {
           </>
         )}
 
-        {isDeployed && contractAddress && tab === "doctor" && (
+        {isDeployed && contractAddress && tab === "doctor" && isAdmin && (
           <>
-            <section className={ui.section} data-testid="section-issuer-registration-api">
-              <div className={ui.sectionInner}>
-                <p className={ui.sectionTitle}>Site administration</p>
-                <h2 className={ui.h2}>Issuer onboarding</h2>
-                <p className={ui.lead} style={{ maxWidth: "58ch" }}>
-                  Doctors use the <strong>Register as a doctor</strong> panel above (IMR excerpt + PDF) for the only
-                  off-chain issuer registration path. After they submit on-chain, use <strong>Approve issuer</strong>{" "}
-                  below. Open the <strong>Contract</strong> tab for a read-only ledger summary.
-                </p>
-              </div>
-            </section>
 
             <section className={ui.section} data-testid="section-approve">
               <div className={ui.sectionInner}>
                 <p className={ui.sectionTitle}>Admin</p>
-                <h2 className={ui.h2}>Approve issuer</h2>
-                <p className={ui.lead}>Requires verification API + attestation.</p>
+                <h2 className={ui.h2}>Doctors waiting for approval</h2>
+                {state && state.pending.length > 0 ? (
+                  <ul className={ui.list} data-testid="pending-doctors">
+                    {state.pending.map((p, i) => (
+                      <li key={`pend-${p.doctor}-${i}`} style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                        <code className={ui.code}>
+                          {p.doctor === walletDoctorKeyHex?.toLowerCase() ? "You" : `${p.doctor.slice(0, 12)}…`}
+                        </code>
+                        <button
+                          type="button"
+                          className={ui.btnPrimary}
+                          data-testid={`btn-approve-${i}`}
+                          onClick={() => void handleApprove(p.doctor)}
+                          disabled={!!flowMessage}
+                        >
+                          Approve
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className={ui.msgMuted}>Nobody is waiting. New doctor requests appear here.</p>
+                )}
+                <details className="zk-explain">
+                  <summary>Approve by key, or change the registry check</summary>
                 <div className={ui.inputRow}>
                   <input
                     className={ui.input}
@@ -692,7 +714,7 @@ export function ZkClinicApp() {
                     type="button"
                     className={ui.btnPrimary}
                     data-testid="btn-approve"
-                    onClick={handleApprove}
+                    onClick={() => void handleApprove()}
                     disabled={!doctorToApprove.trim()}
                   >
                     Approve
@@ -743,28 +765,7 @@ export function ZkClinicApp() {
                     onChange={(e) => setOcrSmcHint(e.target.value)}
                   />
                 </div>
-                {state && state.pending.length > 0 && (
-                  <div style={{ marginTop: "0.75rem" }}>
-                    <p className={ui.msgMuted} style={{ fontSize: "0.8125rem", marginBottom: "0.35rem" }}>
-                      Pending requests (fill approve field)
-                    </p>
-                    <ul className={ui.list}>
-                      {state.pending.map((p, i) => (
-                        <li key={`pend-${p.doctor}-${i}`}>
-                          <code className={ui.code}>{p.doctor.slice(0, 18)}…</code>
-                          <button
-                            type="button"
-                            className={ui.btn}
-                            style={{ marginLeft: "0.5rem", padding: "0.35rem 0.5rem", fontSize: "0.65rem" }}
-                            onClick={() => setDoctorToApprove(p.doctor)}
-                          >
-                            Use →
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
+                </details>
                 {pendingReviewId && (
                   <div style={{ marginTop: "0.75rem" }}>
                     <p className={ui.msgMuted} style={{ fontSize: "0.8125rem" }}>
@@ -786,8 +787,8 @@ export function ZkClinicApp() {
 
             <section className={ui.section} data-testid="section-revoke-issuer">
               <div className={ui.sectionInner}>
-                <p className={ui.sectionTitle}>Admin</p>
-                <h2 className={ui.h2}>Revoke issuer</h2>
+                <details className="zk-explain">
+                <summary>Remove a doctor</summary>
                 <div className={ui.inputRow}>
                   <input
                     className={ui.input}
@@ -831,6 +832,7 @@ export function ZkClinicApp() {
                     </ul>
                   </div>
                 )}
+                </details>
               </div>
             </section>
           </>

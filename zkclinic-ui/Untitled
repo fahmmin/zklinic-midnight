@@ -1,0 +1,28 @@
+  ➜  press h + enter to show help
+5:46:57 pm [vite] Pre-transform error: Missing field `moduleType`
+  Plugin: builtin:vite-react-refresh-wrapper
+  File: [object Object]
+5:46:57 pm [vite] Internal server error: Missing field `moduleType`
+  Plugin: builtin:vite-react-refresh-wrapper
+  File: [object Object]
+      at wrappedPlugin.<computed> (file:///home/fahmin/Documents/codes/midnight/zkclinic/node_modules/rolldown/dist/shared/normalize-string-or-regex-D7wlw16t.mjs:18:36)
+      at EnvironmentPluginContainer.transform (file:///home/fahmin/Documents/codes/midnight/zkclinic/zkclinic-ui/node_modules/vite/dist/node/chunks/dep-D4NMHUTW.js:42324:19)
+      at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+      at async loadAndTransform (file:///home/fahmin/Documents/codes/midnight/zkclinic/zkclinic-ui/node_modules/vite/dist/node/chunks/dep-D4NMHUTW.js:35739:27)
+      at async viteTransformMiddleware (file:///home/fahmin/Documents/codes/midnight/zkclinic/zkclinic-ui/node_modules/vite/dist/node/chunks/dep-D4NMHUTW.js:37254:24)
+5:46:57 pm [vite] Internal server error: Missing field `moduleType`
+  Plugin: builtin:vite-react-refresh-wrapper
+  File: [object Object]
+      at wrappedPlugin.<computed> (file:///home/fahmin/Documents/codes/midnight/zkclinic/node_modules/rolldown/dist/shared/normalize-string-or-regex-D7wlw16t.mjs:18:36)
+      at EnvironmentPluginContainer.transform (file:///home/fahmin/Documents/codes/midnight/zkclinic/zkclinic-ui/node_modules/vite/dist/node/chunks/dep-D4NMHUTW.js:42324:19)
+      at async loadAndTransform (file:///home/fahmin/Documents/codes/midnight/zkclinic/zkclinic-ui/node_modules/vite/dist/node/chunks/dep-D4NMHUTW.js:35739:27)
+5:46:57 pm [vite] Internal server error: Missing field `moduleType`
+  Plugin: builtin:vite-react-refresh-wrapper
+  File: [object Object]
+      at wrappedPlugin.<computed> (file:///home/fahmin/Documents/codes/midnight/zkclinic/node_modules/rolldown/dist/shared/normalize-string-or-regex-D7wlw16t.mjs:18:36)
+      at EnvironmentPluginContainer.transform (file:///home/fahmin/Documents/codes/midnight/zkclinic/zkclinic-ui/node_modules/vite/dist/node/chunks/dep-D4NMHUTW.js:42324:19)
+      at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+      at async loadAndTransform (file:///home/fahmin/Documents/codes/midnight/zkclinic/zkclinic-ui/node_modules/vite/dist/node/chunks/dep-D4NMHUTW.js:35739:27)
+
+
+

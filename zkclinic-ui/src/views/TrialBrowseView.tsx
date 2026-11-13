@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from "react";
-import { CopyButton } from "../components/CopyButton";
 import { DisclosureSummary } from "../components/patient/DisclosureSummary";
 import { proofExpiresInLabel } from "../components/patient/patientCardUtils";
 import { useZKClinic } from "../contexts/ZKClinicContext";
@@ -17,14 +16,8 @@ import {
   type EligibilityEvaluation
 } from "../trialProof";
 import { upsertStoredProof } from "../proofStorage";
-import {
-  deadlineUrgency,
-  loadSavedTrialIds,
-  persistSavedTrialIds,
-  slotsFillPercent,
-  toggleSavedTrialId
-} from "../lib/savedTrials";
 import { DEMO_TRIAL_BROWSE_SEARCH } from "../lib/demoWorkspaceMocks";
+import { attributesFromJson, type HealthAttributesJson } from "zkclinic-contract";
 import { ui } from "../ui";
 
 const VERIFICATION_API_URL = import.meta.env.VITE_VERIFICATION_API_URL || "http://localhost:4100";
@@ -52,6 +45,7 @@ type EvaluationState = {
   pseudonym: string;
   blockedReason?: string;
   evaluation: EligibilityEvaluation;
+  zkAttributes?: HealthAttributesJson;
 };
 
 export function TrialBrowseView({
@@ -60,15 +54,13 @@ export function TrialBrowseView({
   onCredentialChange,
   onProofCreated
 }: TrialBrowseViewProps) {
-  const { state, status, refreshState } = useZKClinic();
+  const { state, status, refreshState, proveEligibility, flowMessage } = useZKClinic();
   const [apiTrials, setApiTrials] = useState<ApiTrial[]>([]);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState(DEMO_TRIAL_BROWSE_SEARCH);
   const [diagnosisFilter, setDiagnosisFilter] = useState("all");
   const [openSlotsOnly, setOpenSlotsOnly] = useState(false);
-  const [savedOnly, setSavedOnly] = useState(false);
-  const [savedTrialIds, setSavedTrialIds] = useState<string[]>(() => loadSavedTrialIds());
   const [sortMode, setSortMode] = useState<"deadline" | "recent">("deadline");
   const [internalCredentialId, setInternalCredentialId] = useState("");
 
@@ -90,14 +82,6 @@ export function TrialBrowseView({
   } | null>(null);
 
   const isDeployed = status === "deployed";
-
-  function handleToggleSaved(trialIdHex: string) {
-    setSavedTrialIds((current) => {
-      const next = toggleSavedTrialId(current, trialIdHex);
-      persistSavedTrialIds(next);
-      return next;
-    });
-  }
 
   useEffect(() => {
     if (controlledCredentialId !== undefined) return;
@@ -160,8 +144,7 @@ export function TrialBrowseView({
           chain.status === 0 &&
           chain.slotsFilled < chain.slotsTotal &&
           Number(chain.deadline) > Date.now());
-      const matchesSaved = !savedOnly || savedTrialIds.includes(trial.trialIdHex.toLowerCase());
-      return matchesCategory && matchesSearch && hasOpenSlots && matchesSaved;
+      return matchesCategory && matchesSearch && hasOpenSlots;
     });
 
     return list.sort((left, right) => {
@@ -174,7 +157,7 @@ export function TrialBrowseView({
       );
       return leftDeadline - rightDeadline;
     });
-  }, [apiTrials, chainById, diagnosisFilter, openSlotsOnly, savedOnly, savedTrialIds, searchTerm, sortMode]);
+  }, [apiTrials, chainById, diagnosisFilter, openSlotsOnly, searchTerm, sortMode]);
 
   async function handleEvaluateTrial(trial: ApiTrial) {
     setActionError(null);
@@ -205,12 +188,19 @@ export function TrialBrowseView({
       if (isCredentialExpired(credential)) {
         blocked.push("This card expired — ask your doctor for a new one.");
       }
+      if (!credential.zkAttributes) {
+        blocked.push("This card has no on-chain ZK attestation — request a new card from your doctor.");
+      }
+      if (!state?.trialsWithCriteria.includes(trial.trialIdHex.toLowerCase())) {
+        blocked.push("This trial has not published ZK-checkable criteria on-chain yet.");
+      }
       setEvaluationState({
         trialIdHex: trial.trialIdHex,
         credentialId: selectedCredential.credentialId,
         pseudonym: await deriveTrialPseudonym(selectedCredential.credentialId, trial.trialIdHex),
         blockedReason: blocked.length > 0 ? blocked.join(" ") : undefined,
-        evaluation
+        evaluation,
+        zkAttributes: credential.zkAttributes
       });
     } catch (error) {
       setActionError(friendlyErrorMessage(error instanceof Error ? error.message : String(error)));
@@ -237,6 +227,13 @@ export function TrialBrowseView({
     setPostingTrialId(trial.trialIdHex);
     setActionError(null);
     try {
+      if (!evaluationState.zkAttributes) throw new Error("This card has no on-chain ZK attestation.");
+      // The real proof: a Midnight transaction whose witnesses (secret key, attributes, Merkle path)
+      // never leave this device. The API below only relays the resulting pseudonym to the manager.
+      const nullifierHex = await proveEligibility(
+        trial.trialIdHex,
+        attributesFromJson(evaluationState.zkAttributes)
+      );
       const createdAt = Date.now();
       const res = await fetch(`${VERIFICATION_API_URL.replace(/\/$/, "")}/proofs`, {
         method: "POST",
@@ -245,7 +242,7 @@ export function TrialBrowseView({
           trialIdHex: trial.trialIdHex,
           criteriaHashHex: trial.criteriaHashHex,
           proof: {
-            pseudonym: evaluationState.pseudonym,
+            pseudonym: nullifierHex,
             eligible: true,
             matchPercent: evaluationState.evaluation.matchPercent,
             thresholdPercent: evaluationState.evaluation.thresholdPercent,
@@ -299,25 +296,19 @@ export function TrialBrowseView({
   return (
     <div data-testid="trial-browse">
       <div className={ui.divider} />
-      <p className={ui.sectionTitle}>Trial matching</p>
-      <h3 className={ui.h2}>Match your card to open studies</h3>
-      <p className={ui.lead}>
-        Select the health card above, filter trials, then run a match on this device. This is the core{" "}
-        <strong>clinical trial matching</strong> flow — you confirm disclosure before a proof ID is created; only rule
-        outcomes and the proof ID leave this context, not your raw chart.
-      </p>
+      <h3 className={ui.h2}>Open studies</h3>
+      <p className={ui.lead}>Tap a study to check if you fit. The check runs on your phone.</p>
 
       {lastPostedProof && (
         <div className={ui.highlight} data-testid="proof-success-banner" style={{ marginBottom: "1rem" }}>
-          <p className={ui.highlightLabel}>Proof created</p>
+          <p className={ui.highlightLabel}>Zero-knowledge proof verified on Midnight</p>
           <p className={ui.msg} style={{ margin: "0.25rem 0 0" }}>
             <strong>{lastPostedProof.trialTitle}</strong>
           </p>
           <p className={ui.msgMuted} style={{ margin: "0.35rem 0 0", fontSize: "0.875rem" }}>
-            Proof ID <code className={ui.code}>{lastPostedProof.proofId}</code>{" "}
-            <CopyButton value={lastPostedProof.proofId} label="Copy proof ID" data-testid="btn-copy-proof-id" />
+            Proof ID <code className={ui.code}>{lastPostedProof.proofId}</code>
             {" · "}
-            Trial pseudonym <code className={ui.code}>{lastPostedProof.pseudonym}</code>
+            On-chain pseudonym <code className={ui.code}>{lastPostedProof.pseudonym.slice(0, 16)}…</code>
           </p>
           <p className={ui.msgMuted} style={{ margin: "0.35rem 0 0", fontSize: "0.8125rem" }}>
             Valid {proofExpiresInLabel(lastPostedProof.expiresAt)} · Regenerate after 30 days if enrollment isn’t done.
@@ -369,15 +360,6 @@ export function TrialBrowseView({
           />
           Open slots only
         </label>
-        <label style={{ display: "flex", alignItems: "center", gap: 8, paddingBottom: 12 }}>
-          <input
-            type="checkbox"
-            checked={savedOnly}
-            onChange={(event) => setSavedOnly(event.target.checked)}
-            data-testid="trial-browse-saved-only"
-          />
-          Saved only ({savedTrialIds.length})
-        </label>
       </div>
 
       <div className={ui.inputRow} style={{ marginTop: "0.75rem", alignItems: "end" }}>
@@ -423,9 +405,7 @@ export function TrialBrowseView({
       )}
       {filteredTrials.length === 0 && !fetchError && (
         <p className={ui.msgMuted} data-testid="trial-browse-empty">
-          {savedOnly && savedTrialIds.length === 0
-            ? "You haven’t saved any trials yet — tap the star on a trial to bookmark it on this device."
-            : "No trials matched the current filters."}
+          No trials matched the current filters.
         </p>
       )}
 
@@ -442,8 +422,6 @@ export function TrialBrowseView({
           const activeEvaluation =
             evaluationState?.trialIdHex === trial.trialIdHex ? evaluationState : null;
           const disclosureOpen = disclosureOpenForTrialId === trial.trialIdHex;
-          const isSaved = savedTrialIds.includes(trial.trialIdHex.toLowerCase());
-          const urgency = chain ? deadlineUrgency(Number(chain.deadline)) : null;
 
           return (
             <li
@@ -454,20 +432,7 @@ export function TrialBrowseView({
                 paddingBottom: "1rem"
               }}
             >
-              <div className="zk-trial-head">
-                <p style={{ fontWeight: 700, margin: "0 0 0.35rem" }}>{trial.criteria.title}</p>
-                <button
-                  type="button"
-                  className="zk-star"
-                  aria-pressed={isSaved}
-                  aria-label={isSaved ? "Remove from saved trials" : "Save trial"}
-                  title={isSaved ? "Saved on this device — click to remove" : "Save on this device"}
-                  onClick={() => handleToggleSaved(trial.trialIdHex)}
-                  data-testid={`btn-save-${trial.trialIdHex.slice(0, 8)}`}
-                >
-                  {isSaved ? "★" : "☆"}
-                </button>
-              </div>
+              <p style={{ fontWeight: 700, margin: "0 0 0.35rem" }}>{trial.criteria.title}</p>
               {lines.slice(1).map((line, index) => (
                 <p key={index} className={ui.msgMuted} style={{ fontSize: "0.875rem", margin: "0.2rem 0" }}>
                   {line}
@@ -484,24 +449,6 @@ export function TrialBrowseView({
                   Not found on this contract (join the contract that created this trial).
                 </p>
               )}
-              {chain && urgency ? (
-                <div className="zk-trial-meta" data-testid={`trial-meta-${trial.trialIdHex.slice(0, 8)}`}>
-                  <span className={`zk-badge zk-badge--${urgency.tone}`}>{urgency.label}</span>
-                  <div
-                    className="zk-meter"
-                    role="progressbar"
-                    aria-label="Enrollment slots filled"
-                    aria-valuemin={0}
-                    aria-valuemax={100}
-                    aria-valuenow={slotsFillPercent(chain.slotsFilled, chain.slotsTotal)}
-                  >
-                    <div
-                      className="zk-meter-fill"
-                      style={{ width: `${slotsFillPercent(chain.slotsFilled, chain.slotsTotal)}%` }}
-                    />
-                  </div>
-                </div>
-              ) : null}
 
               <div className={ui.inputRow} style={{ marginTop: "0.75rem", alignItems: "center" }}>
                 <button
@@ -590,7 +537,7 @@ export function TrialBrowseView({
                       disabled={postingTrialId === trial.trialIdHex || !disclosureAccepted}
                       data-testid="btn-confirm-proof"
                     >
-                      {postingTrialId === trial.trialIdHex ? "Posting proof…" : "Confirm & post proof ID"}
+                      {postingTrialId === trial.trialIdHex ? flowMessage ?? "Proving…" : "Generate ZK proof on-chain"}
                     </button>
                     <button
                       type="button"
