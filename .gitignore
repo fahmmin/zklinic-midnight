@@ -10,3 +10,6 @@ plan.md
 
 # Vite per-machine overrides
 *.local
+
+# Cloudflare wrangler local state
+.wrangler/

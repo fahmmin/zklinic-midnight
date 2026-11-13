@@ -142,6 +142,9 @@ export type ZkClinicApiDependencies = {
   randomBytes?: (size: number) => Uint8Array | Buffer;
   resolveIcd10Exact?: (code: string) => Promise<{ code: string; name: string } | null>;
   didit?: ReturnType<typeof createDidit>;
+  /** Swap restify (e.g. the Workers shim) and where stores persist (e.g. Durable Object storage). */
+  restify?: unknown;
+  persistence?: { load(): PersistedEnvelopeV1 | null; save(data: PersistedEnvelopeV1): void };
 };
 
 export function stableStringify(value: unknown): string {
@@ -192,7 +195,7 @@ export function createZkClinicServer(deps: ZkClinicApiDependencies = {}) {
   const resolveIcd10Exact = deps.resolveIcd10Exact ?? defaultResolveIcd10Exact;
   const didit = deps.didit ?? createDidit();
 
-  const restify = loadRestify();
+  const restify = (deps.restify as typeof Restify | undefined) ?? loadRestify();
   const server = restify.createServer({ name: "zkclinic-verification-api" });
 
   /**
@@ -270,7 +273,8 @@ export function createZkClinicServer(deps: ZkClinicApiDependencies = {}) {
           doctorReviewQueue: [...doctorReviewQueue.entries()],
           issuerRegistrations: [...issuerRegistrations.entries()]
         };
-        savePersistedJson(persistencePath, envelope);
+        if (deps.persistence) deps.persistence.save(envelope);
+        else savePersistedJson(persistencePath, envelope);
       } catch (e) {
         // eslint-disable-next-line no-console
         console.error("[zkclinic-verification-api] persist failed:", e);
@@ -279,7 +283,7 @@ export function createZkClinicServer(deps: ZkClinicApiDependencies = {}) {
   }
 
   if (!persistenceDisabled) {
-    const loaded = loadPersistedJson(persistencePath);
+    const loaded = deps.persistence ? deps.persistence.load() : loadPersistedJson(persistencePath);
     if (loaded) {
       try {
         for (const [k, v] of loaded.credentialRequests) {

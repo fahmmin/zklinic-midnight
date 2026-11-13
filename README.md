@@ -147,7 +147,7 @@ The Wave 3 UI and CLI need a Wave 3 contract: the circuit set changed, so they c
 
 ## Point all clients at one Verification API base URL
 
-Every component that talks to the HTTP API must use the **same origin** (scheme + host + port). For the hosted preprod demo, point everything at **https://zklinic-verification-api.onrender.com** (Render service name spelling). For local development, use `http://localhost:4100` (or your own hosted URL).
+Every component that talks to the HTTP API must use the **same origin** (scheme + host + port). For the hosted preprod demo, point everything at **https://zklinic-verification-api.kkfahmin.workers.dev** (Cloudflare Workers; see `zkclinic-verification-api/wrangler.jsonc`). For local development, use `http://localhost:4100` (or your own hosted URL).
 
 
 
@@ -157,10 +157,10 @@ Copy-paste template for **preprod + hosted API** (adjust origin if you run the A
 
 ```bash
 # zkclinic-cli — repo or package .env, or export before running
-VERIFICATION_API_URL=https://zklinic-verification-api.onrender.com
+VERIFICATION_API_URL=https://zklinic-verification-api.kkfahmin.workers.dev
 
 # zkclinic-ui — e.g. .env.preprod / .env.local (Vite exposes only VITE_*)
-VITE_VERIFICATION_API_URL=https://zklinic-verification-api.onrender.com
+VITE_VERIFICATION_API_URL=https://zklinic-verification-api.kkfahmin.workers.dev
 
 # zkclinic-verification-api — local dev only (default 4100)
 PORT=4100
@@ -347,7 +347,7 @@ sequenceDiagram
 2. **Credentials** — Patient gets a request code; doctor fulfills and registers on-chain; patient holds encrypted material locally.
 3. **Trials** — Manager creates trials and publishes machine-checkable criteria; patients prove eligibility with `proveEligibility`; enrollment is only possible for a proven pseudonym and capacity is enforced on-chain.
 
-**Preprod quick alignment:** Join your Wave 3 contract address (table above), set `VITE_VERIFICATION_API_URL` / `VERIFICATION_API_URL` to `https://zklinic-verification-api.onrender.com`, use **[1AM](https://1am.xyz/)** on preprod in the browser, and keep a local **proof server** reachable at `PROOF_SERVER_URL` (for example `http://127.0.0.1:6300`) so wallet/SDK “dust” sync can finish — without it, CLI sync may sit on `dust=false` until timeout.
+**Preprod quick alignment:** Join your Wave 3 contract address (table above), set `VITE_VERIFICATION_API_URL` / `VERIFICATION_API_URL` to `https://zklinic-verification-api.kkfahmin.workers.dev`, use **[1AM](https://1am.xyz/)** on preprod in the browser, and keep a local **proof server** reachable at `PROOF_SERVER_URL` (for example `http://127.0.0.1:6300`) so wallet/SDK “dust” sync can finish — without it, CLI sync may sit on `dust=false` until timeout.
 
 ---
 
@@ -385,7 +385,7 @@ npm run test:e2e
 
 | Resource                                 | URL                                                                                                                                  |
 | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| ZKClinic Verification API (preprod demo) | [https://zklinic-verification-api.onrender.com](https://zklinic-verification-api.onrender.com)                                       |
+| ZKClinic Verification API (preprod demo) | [https://zklinic-verification-api.kkfahmin.workers.dev](https://zklinic-verification-api.kkfahmin.workers.dev)                                       |
 | Midnight docs                            | [https://docs.midnight.network](https://docs.midnight.network)                                                                       |
 | Compact language reference               | [https://docs.midnight.network/develop/reference/compact/lang-ref](https://docs.midnight.network/develop/reference/compact/lang-ref) |
 | 1AM wallet (Midnight)                    | [https://1am.xyz/](https://1am.xyz/)                                                                                                |

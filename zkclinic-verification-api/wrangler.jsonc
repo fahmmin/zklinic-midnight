@@ -1,0 +1,14 @@
+// Cloudflare Workers deploy of the verification API: `npx wrangler deploy` from this folder.
+{
+  "name": "zklinic-verification-api",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-11-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "durable_objects": { "bindings": [{ "name": "API", "class_name": "ZkClinicApi" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ZkClinicApi"] }],
+  "vars": {
+    // Didit runs in mock mode for the public demo (always approves, no ID data). For real checks set
+    // DIDIT_API_KEY / DIDIT_WORKFLOW_ID as secrets (`wrangler secret put`) and remove DIDIT_MOCK.
+    "DIDIT_MOCK": "1"
+  }
+}
