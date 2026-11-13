@@ -1,6 +1,5 @@
 # ZKLinic
 
-[![CI](https://github.com/fahmmin/zklinic-midnight/actions/workflows/ci.yml/badge.svg)](https://github.com/fahmmin/zklinic-midnight/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
 **Prove you qualify for a clinical trial without showing anyone your medical record.** Built on [Midnight](https://midnight.network).
